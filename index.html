@@ -25,7 +25,7 @@
      lets an installed page do with a desk on the local network, before the real thing is built. -->
 <h1>desk companion: test bench</h1>
 <p>Type the desk's address as you open it on this network, then run the tests. Send Claude the text in the box.</p>
-<form><input name="desk" placeholder="192.168.86.39 or desk.lan" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="The desk's address"><button>Run</button></form>
+<form><input name="desk" placeholder="192.168.86.39 or desk.lan" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="The desk's address"><button>Run</button><button type="button" id="helper">Helper tab</button></form>
 <pre id="out">not run yet</pre>
 
 <script>
@@ -63,7 +63,14 @@ async function reach(desk) {
   await ask("1 direct", {});
   await ask("2 direct, local network", { targetAddressSpace: "local" });
   await ask("3 direct, private", { targetAddressSpace: "private" });
-  // a tab of the desk's own, which answers this page across the two windows
+  say("4 helper tab", "press “Helper tab” to try it");
+}
+
+// a tab of the desk's own, which answers this page across the two windows. It has its own
+// button: a phone only lets a page open a tab straight from a tap.
+async function helper(desk) {
+  if (lines.length && lines[lines.length - 1].startsWith("done")) lines.pop();
+  if (lines.length && lines[lines.length - 1].startsWith("4 helper tab")) lines.pop();
   const answer = new Promise(ok => {
     const hear = e => { if (e.origin === "http://" + desk) { removeEventListener("message", hear); ok("PASS " + JSON.stringify(e.data).slice(0, 120)); } };
     addEventListener("message", hear);
@@ -72,11 +79,14 @@ async function reach(desk) {
   const tab = window.open("http://" + desk + "/bridge.html", "desk-bridge");
   say("4 helper tab", tab ? "opened…" : "FAIL the phone blocked the tab");
   if (tab) { lines.pop(); say("4 helper tab", await answer); try { tab.close(); } catch { /* it stays */ } }
+  say("done", new Date().toLocaleTimeString());
 }
+const address = () => form.desk.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+document.getElementById("helper").addEventListener("click", () => { if (address()) helper(address()); });
 
 form.addEventListener("submit", async e => {
   e.preventDefault();
-  const desk = form.desk.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const desk = address();
   try { localStorage.setItem("desk", desk); } catch { /* not kept */ }
   lines.length = 0;
   say("browser", navigator.userAgent.replace(/^.*?(Chrome\/[\d.]+|Firefox\/[\d.]+).*$/, "$1") + (navigator.brave ? " (Brave)" : ""));
