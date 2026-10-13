@@ -1,0 +1,42 @@
+/* theme.css — color-driven theming, the Symbios way.
+ *
+ * A theme is just a handful of colors. Everything else — panels, hairlines,
+ * muted text, focus glow — is *derived* from --bg / --fg / --accent so a new
+ * theme is a 3-line block, never a re-style. This is the "less is more" rule:
+ * the shell's base.css never hardcodes a colour, it only ever reads these vars.
+ *
+ * Switch themes by setting the attribute on <html>:
+ *     document.documentElement.dataset.theme = 'phosphor'
+ * (core/theme.js persists the choice to localStorage and applies it on boot.)
+ *
+ * NOTE: color-mix() needs a reasonably modern engine. Verify on the deck's
+ * cog/WPE WebKit build; if it's too old, fall back to listing the derived
+ * tokens explicitly per theme (uglier, but no dependency).
+ */
+
+:root {
+  /* ---- the only knobs a theme sets ---- */
+  --bg:     #ffffff;   /* paper  */
+  --fg:     #161616;   /* ink    */
+  --accent: #161616;   /* mono by default: accent == ink (1-bit look) */
+
+  --font: 'Departure Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* ---- everything below is DERIVED — do not set these per theme ---- */
+  --muted:        color-mix(in srgb, var(--fg) 52%, var(--bg));
+  --hair:         color-mix(in srgb, var(--fg) 12%, var(--bg)); /* faint fills   */
+  --panel:        var(--bg);                                    /* opaque, no glass */
+  --panel-border: color-mix(in srgb, var(--fg) 24%, var(--bg)); /* 1px window edge */
+  --accent-soft:  color-mix(in srgb, var(--accent) 16%, transparent);
+  --dither:       radial-gradient(var(--fg) 0.5px, transparent 0.7px); /* desktop texture */
+}
+
+/* ---- themes: each is just colors. add one in three lines. ---- */
+
+/* light paper (default lives in :root above) */
+
+[data-theme="ink"]      { --bg:#0d0d0d; --fg:#e8e8e8; --accent:#e8e8e8; }
+[data-theme="phosphor"] { --bg:#001a0d; --fg:#3bff88; --accent:#3bff88; }
+[data-theme="amber"]    { --bg:#0c0900; --fg:#ffb000; --accent:#ffb000; }
+[data-theme="blue"]     { --bg:#f6f8fc; --fg:#0c2340; --accent:#2f6fb0; }
+[data-theme="slate"]    { --bg:#14181d; --fg:#cfd6dd; --accent:#6aa6ff; }

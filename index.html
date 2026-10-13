@@ -1,25 +1,44 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="phosphor">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#001a0d">
 <title>desk</title>
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<!-- the look is symbios's mobile shell, taken as it is: its theme, its typeface, its mobile.css -->
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/theme.css">
+<link rel="stylesheet" href="css/mobile.css">
 </head>
 <body>
-<!-- The desk's companion on the phone: links shared to it wait here, the desk turns them into
-     articles when it is in reach, and the articles are kept on the phone to read anywhere. -->
-<nav>
-  <button data-view="library" aria-pressed="true">Library</button>
-  <button data-view="waiting">Waiting</button>
-  <button data-view="desk">Desk</button>
-</nav>
-<main id="page"></main>
-<footer id="note" aria-live="polite"></footer>
-<script src="marked.min.js"></script>
-<script type="module" src="app.js"></script>
+  <!-- top status bar: clock · name · whether the desk is in reach -->
+  <header id="statusbar">
+    <span id="clock">--:--</span>
+    <span class="brand">DESK</span>
+    <div class="sb-right">
+      <button id="conn" class="conn" aria-label="desk connection"><i class="dot"></i><span id="conn-label">…</span></button>
+    </div>
+  </header>
+
+  <!-- springboard: the home grid of app tiles -->
+  <main id="home"><div id="grid"></div></main>
+
+  <!-- an app opens as a pane sliding in from the right -->
+  <div id="pane-scrim"></div>
+  <section id="pane" aria-hidden="true">
+    <div class="pane-grab"></div>
+    <header class="pane-head">
+      <button id="pane-back" class="pane-btn" aria-label="back">&#8592;</button>
+      <span id="pane-title" class="pane-title"></span>
+      <span class="pane-spacer"></span>
+    </header>
+    <div id="pane-body" class="pane-body"></div>
+  </section>
+
+  <script src="marked.min.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
