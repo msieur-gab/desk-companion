@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#001a0d">
+<title>desk</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<style>
+  :root { --bg: #001a0d; --fg: #3bff88; --muted: #2a9c5a; --line: #0f5a30; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; }
+  h1 { font-size: 16px; font-weight: 400; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  form { display: flex; gap: 6px; margin-bottom: 12px; }
+  input, button { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); padding: 8px 10px; }
+  input { flex: 1; min-width: 0; }
+  button { border-color: var(--fg); }
+  pre { margin: 0; padding: 12px; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<!-- The desk's companion on the phone. For now it is a test bench: it finds out what this phone
+     lets an installed page do with a desk on the local network, before the real thing is built. -->
+<h1>desk companion: test bench</h1>
+<p>Type the desk's address as you open it on this network, then run the tests. Send Claude the text in the box.</p>
+<form><input name="desk" placeholder="192.168.86.39 or desk.lan" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="The desk's address"><button>Run</button></form>
+<pre id="out">not run yet</pre>
+
+<script>
+const out = document.getElementById("out"), form = document.querySelector("form");
+const lines = [];
+const say = (what, result) => { lines.push(what.padEnd(26) + result); out.textContent = lines.join("\n"); };
+try { form.desk.value = localStorage.getItem("desk") || ""; } catch { /* not kept */ }
+
+// what the phone gives this page, whatever the desk
+async function own() {
+  say("page", location.origin + (matchMedia("(display-mode: standalone)").matches ? " (installed)" : " (in a browser tab)"));
+  const shared = new URLSearchParams(location.search);
+  say("shared to it", ["title", "text", "url"].map(k => shared.get(k)).filter(Boolean).join(" | ") || "nothing");
+  try {
+    const reg = await navigator.serviceWorker.register("sw.js");
+    say("offline start", "ready (" + (reg.active ? "active" : "installing") + ")");
+  } catch (e) { say("offline start", "FAIL " + e.message); }
+  try {
+    const db = await new Promise((ok, no) => { const r = indexedDB.open("desk-test", 1); r.onupgradeneeded = () => r.result.createObjectStore("kept"); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
+    await new Promise((ok, no) => { const t = db.transaction("kept", "readwrite"); t.objectStore("kept").put("x".repeat(200000), "probe"); t.oncomplete = ok; t.onerror = () => no(t.error); });
+    const kept = navigator.storage?.persist ? await navigator.storage.persist() : null;
+    say("storage on the phone", "works" + (kept === true ? ", protected from clean-up" : kept === false ? ", may be cleaned up by the phone" : ""));
+  } catch (e) { say("storage on the phone", "FAIL " + e.message); }
+}
+
+// three ways for this page (https) to talk to the desk (plain http, local network)
+async function reach(desk) {
+  const url = "http://" + desk + "/api/status";
+  const ask = async (name, options) => {
+    try {
+      const r = await Promise.race([fetch(url, options), new Promise((_, no) => setTimeout(() => no(new Error("no answer in 8 s")), 8000))]);
+      say(name, "PASS " + (await r.json()).host);
+    } catch (e) { say(name, "FAIL " + e.message); }
+  };
+  await ask("1 direct", {});
+  await ask("2 direct, local network", { targetAddressSpace: "local" });
+  await ask("3 direct, private", { targetAddressSpace: "private" });
+  // a tab of the desk's own, which answers this page across the two windows
+  const answer = new Promise(ok => {
+    const hear = e => { if (e.origin === "http://" + desk) { removeEventListener("message", hear); ok("PASS " + JSON.stringify(e.data).slice(0, 120)); } };
+    addEventListener("message", hear);
+    setTimeout(() => ok("FAIL no answer in 12 s"), 12000);
+  });
+  const tab = window.open("http://" + desk + "/bridge.html", "desk-bridge");
+  say("4 helper tab", tab ? "opened…" : "FAIL the phone blocked the tab");
+  if (tab) { lines.pop(); say("4 helper tab", await answer); try { tab.close(); } catch { /* it stays */ } }
+}
+
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const desk = form.desk.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  try { localStorage.setItem("desk", desk); } catch { /* not kept */ }
+  lines.length = 0;
+  say("browser", navigator.userAgent.replace(/^.*?(Chrome\/[\d.]+|Firefox\/[\d.]+).*$/, "$1") + (navigator.brave ? " (Brave)" : ""));
+  await own();
+  if (desk) await reach(desk); else say("desk", "no address typed");
+  say("done", new Date().toLocaleTimeString());
+});
+</script>
+</body>
+</html>
