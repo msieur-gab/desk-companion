@@ -77,6 +77,22 @@ async function sync() {
   }
 }
 
+// ---- installing: the browser says when it is ready to; the Desk place then offers a button ----
+let offer = null, installedNow = false;
+addEventListener("beforeinstallprompt", e => { e.preventDefault(); offer = e; if (view === "desk") show("desk"); });
+addEventListener("appinstalled", () => { offer = null; installedNow = true; say("Installed on this phone."); if (view === "desk") show("desk"); });
+function installing() {
+  const box = el("div");
+  if (matchMedia("(display-mode: standalone)").matches) box.append(el("p", "muted", "Installed: opened as an app. Other apps can share a link to “desk”."));
+  else if (installedNow) box.append(el("p", "muted", "Installed just now. Open it from the phone's app list."));
+  else if (offer) {
+    const b = el("button", "", "Install on this phone");
+    b.addEventListener("click", async () => { offer.prompt(); const { outcome } = await offer.userChoice; say(outcome === "accepted" ? "Installing…" : "Not installed."); });
+    box.append(b, el("p", "muted", "The browser is ready to install it."));
+  } else box.append(el("p", "muted", "This browser has not offered to install it (yet). Sharing from other apps needs an install made with Chrome."));
+  return box;
+}
+
 // ---- the three places ----
 let view = "library";
 const places = {
@@ -116,7 +132,7 @@ const places = {
       await put("settings", form.at.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, ""), "desk");
       show("desk");
     });
-    page.replaceChildren(el("h3", "", "WHERE THE DESK IS"), form);
+    page.replaceChildren(el("h3", "", "ON THIS PHONE"), installing(), el("h3", "", "WHERE THE DESK IS"), form);
     if (!at) return page.append(el("p", "muted", "Type the address the desk has on this network. At home that is its name on the router; elsewhere, the address its WiFi screen shows."));
     const board = el("div");
     page.append(Object.assign(el("button", "", "Sync with the desk"), { onclick: sync }),
