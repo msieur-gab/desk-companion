@@ -1,0 +1,38 @@
+/* The desk's phosphor look, for one narrow screen. */
+@font-face { font-family: "Departure Mono"; src: url("DepartureMono-Regular.woff2") format("woff2"); font-display: swap; }
+:root { --bg: #001a0d; --fg: #3bff88; --muted: #2a9c5a; --line: #0f5a30; --hair: #06301a; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font: 15px/1.6 "Departure Mono", ui-monospace, monospace; }
+button, input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); padding: 8px 12px; border-radius: 0; }
+button { cursor: pointer; }
+a { color: var(--fg); }
+
+nav { display: flex; gap: 6px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; border-bottom: 1px solid var(--line); }
+nav button { flex: 1; color: var(--muted); font-size: 13px; }
+nav button[aria-pressed="true"] { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+main { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
+footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; min-height: 36px; }
+
+h3 { font-weight: 400; font-size: 11px; letter-spacing: 1px; color: var(--muted); margin: 0 0 10px; }
+.row { display: block; width: 100%; text-align: left; padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--line); }
+.row small, .muted { color: var(--muted); font-size: 12px; display: block; overflow-wrap: anywhere; }
+.row.refused { border-style: dashed; }
+.bar { display: flex; gap: 6px; margin-bottom: 14px; }
+.bar input { flex: 1; min-width: 0; }
+.bar button { border-color: var(--fg); }
+.pair { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--hair); }
+.pair span:first-child { color: var(--muted); }
+
+/* an article, as the desk's Reader draws it */
+article { max-width: 62ch; margin: 0 auto; }
+article h1 { font-size: 20px; font-weight: 400; line-height: 1.35; margin: 0 0 10px; }
+article h2, article h3 { font-size: 16px; font-weight: 400; letter-spacing: 0; color: var(--fg); margin: 20px 0 6px; }
+article p { margin: 0 0 14px; }
+article .by { color: var(--muted); font-size: 12px; }
+article img { max-width: 100%; height: auto; display: block; margin: 12px 0; }
+article blockquote { margin: 0 0 14px; padding-left: 14px; border-left: 2px solid var(--fg); opacity: .85; }
+article pre, article code { background: var(--hair); font-size: 13px; }
+article pre { padding: 10px; overflow-x: auto; }
+article ul, article ol { margin: 0 0 14px; padding-left: 22px; }
+article hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
