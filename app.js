@@ -256,7 +256,7 @@ function confirmRemove(r, w) {
   return false;
 }
 
-// ---- springboard ----
+// ---- springboard + dock ----
 function tile(id) {
   const b = el("button", "app-tile"), glyph = el("span", "glyph", APPS[id].glyph);
   if (id === "share") glyph.append(Object.assign(el("span", "tile-badge"), { hidden: true }));
@@ -264,7 +264,7 @@ function tile(id) {
   b.onclick = () => openApp(id);
   return b;
 }
-for (const id of Object.keys(APPS)) document.getElementById("grid").append(tile(id)); // four apps: the grid is enough, no dock
+for (const id of Object.keys(APPS)) { document.getElementById("grid").append(tile(id)); document.getElementById("dock-tiles").append(tile(id)); }
 async function badges() {
   const n = (await all("waiting")).length;
   for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n; b.textContent = n; }
