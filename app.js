@@ -379,12 +379,14 @@ function giveWifi() {
 }
 
 // the phone as a trackpad for the desk on an HDMI screen, over Bluetooth (desk-bluetooth's "steer"):
-// drag moves, a quick tap clicks, two fingers scroll. A move is sent without an answer; while one is
-// on its way the next ones add up, so the phone sends as fast as the link takes and no faster.
+// drag moves, a quick tap clicks, two fingers scroll, and a tap then a touch held and dragged holds the
+// button down (as on a laptop's trackpad): that moves a window by its title bar. A move is sent
+// without an answer; while one is on its way the next ones add up, so the phone sends as fast as the
+// link takes and no faster. Presses and releases keep their place among the moves.
 // EXPERIMENT: the desk takes this from any phone near it for now, as the WiFi.
 const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
 function steerDesk() {
-  let device = null, steer = null, busy = false, dx = 0, dy = 0, wheel = 0, clicks = [], sent = 0;
+  let device = null, steer = null, busy = false, dx = 0, dy = 0, wheel = 0, lines = [], sent = 0;
   const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
@@ -401,12 +403,12 @@ function steerDesk() {
     if (busy || !steer) return;
     busy = true;
     try {
-      while (dx || dy || wheel || clicks.length) {
-        const lines = [...clicks.splice(0)];
-        if (dx || dy) lines.unshift(`m ${dx} ${dy}`);
-        if (wheel) lines.push(`s ${wheel}`);
+      while (dx || dy || wheel || lines.length) {
+        const out = lines.splice(0);
+        if (dx || dy) out.push(`m ${dx} ${dy}`);
+        if (wheel) out.push(`s ${wheel}`);
         dx = dy = wheel = 0;
-        await steer.writeValueWithoutResponse(new TextEncoder().encode(lines.join("\n")));
+        await steer.writeValueWithoutResponse(new TextEncoder().encode(out.join("\n")));
         sent++;
       }
     } catch (e) { said.textContent = "Bluetooth: " + e.message; stop(); go.disabled = false; }
@@ -419,19 +421,25 @@ function steerDesk() {
       said.textContent = "connecting to " + (device.name || "the desk");
       device.addEventListener("gattserverdisconnected", () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; });
       steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
-      said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
+      said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll; tap then hold and drag to move a window.";
     } catch (e) {
       said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message;
       stop(); go.disabled = false;
     }
   };
   const SPEED = 1.7; // screen pixels for one pixel of the pad; quicker strokes go further
-  let last = null, travel = 0, at = 0, two = false, rest = 0;
+  // a button event goes after the moves made before it
+  const press = line => { if (dx || dy) { lines.push(`m ${dx} ${dy}`); dx = dy = 0; } lines.push(line); pump(); };
+  const hold = on => { holding = on; pad.style.borderColor = on ? "var(--accent,#0f0)" : ""; pad.style.borderWidth = on ? "3px" : ""; };
+  let last = null, travel = 0, at = 0, two = false, rest = 0, tapped = 0, holding = false;
   const point = e => ({ x: e.touches[0].clientX, y: e.touches[0].clientY });
   pad.addEventListener("touchstart", e => {
     e.preventDefault();
     if (e.touches.length > 1) two = true;
-    if (e.touches.length === 1) { two = false; travel = 0; at = Date.now(); }
+    if (e.touches.length === 1) {
+      two = false; travel = 0; at = Date.now();
+      if (at - tapped < 300) { hold(true); press("d l"); } // a tap, then a touch: the button stays down
+    }
     last = point(e);
   }, { passive: false });
   pad.addEventListener("touchmove", e => {
@@ -453,11 +461,13 @@ function steerDesk() {
   pad.addEventListener("touchend", e => {
     e.preventDefault();
     if (e.touches.length) { last = point(e); return; }
-    if (!two && travel < 10 && Date.now() - at < 250) { clicks.push("c l"); pump(); }
+    const tap = !two && travel < 10 && Date.now() - at < 250;
+    if (holding) { hold(false); press("u l"); tapped = 0; } // lifted: the button lets go
+    else if (tap) { press("c l"); tapped = Date.now(); }
     last = null;
   }, { passive: false });
-  left.onclick = () => { clicks.push("c l"); pump(); };
-  right.onclick = () => { clicks.push("c r"); pump(); };
+  left.onclick = () => press("c l");
+  right.onclick = () => press("c r");
   const form = el("div", "m-pad");
   form.append(text("div", "m-muted", "STEER THE DESK'S SCREEN"), el("div", "", "&nbsp;"), go, pad, buttons, said, pace);
   body.replaceChildren(form);
