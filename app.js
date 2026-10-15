@@ -427,18 +427,23 @@ function steerDesk() {
       stop(); go.disabled = false;
     }
   };
-  const SPEED = 1.7; // screen pixels for one pixel of the pad; quicker strokes go further
+  // screen pixels for one pixel of the pad; quicker strokes go further. 1.7 felt right at 1080p; the
+  // kiosk is at 720p now, where a pixel is 1.5 times more of the screen
+  const SPEED = 1.15;
   // a button event goes after the moves made before it
   const press = line => { if (dx || dy) { lines.push(`m ${dx} ${dy}`); dx = dy = 0; } lines.push(line); pump(); };
   const hold = on => { holding = on; pad.style.borderColor = on ? "var(--accent,#0f0)" : ""; pad.style.borderWidth = on ? "3px" : ""; };
-  let last = null, travel = 0, at = 0, two = false, rest = 0, tapped = 0, holding = false;
+  let last = null, travel = 0, at = 0, two = false, rest = 0, tapped = 0, tapAt = null, holding = false;
   const point = e => ({ x: e.touches[0].clientX, y: e.touches[0].clientY });
   pad.addEventListener("touchstart", e => {
     e.preventDefault();
     if (e.touches.length > 1) two = true;
     if (e.touches.length === 1) {
       two = false; travel = 0; at = Date.now();
-      if (at - tapped < 300) { hold(true); press("d l"); } // a tap, then a touch: the button stays down
+      // a tap, then at once a touch on the same spot: the button stays down. Quick and close, so a
+      // finger put back to steer after a click doesn't grab
+      const p = point(e);
+      if (at - tapped < 200 && tapAt && Math.hypot(p.x - tapAt.x, p.y - tapAt.y) < 30) { hold(true); press("d l"); }
     }
     last = point(e);
   }, { passive: false });
@@ -463,7 +468,7 @@ function steerDesk() {
     if (e.touches.length) { last = point(e); return; }
     const tap = !two && travel < 10 && Date.now() - at < 250;
     if (holding) { hold(false); press("u l"); tapped = 0; } // lifted: the button lets go
-    else if (tap) { press("c l"); tapped = Date.now(); }
+    else if (tap) { press("c l"); tapped = Date.now(); tapAt = last; }
     last = null;
   }, { passive: false });
   left.onclick = () => press("c l");
