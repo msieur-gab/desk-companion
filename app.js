@@ -1,7 +1,7 @@
 // The desk's companion on the phone. The look is symbios's mobile shell (status bar, springboard,
-// panes sliding in; css/mobile.css unchanged); the code is its own and small. Four apps: Reader (articles kept on this
+// panes sliding in; css/mobile.css unchanged); the code is its own and small. Five apps: Reader (articles kept on this
 // phone, readable with no network), Shared (links shared to it, waiting for the desk), Monitor
-// (how the desk is doing) and Settings (where the desk is, sync, install). The desk does the
+// (how the desk is doing), Remote (the phone as the desk's trackpad) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -21,6 +21,7 @@ const I = {
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11l6.6-3.6M8.2 13l6.6 3.6"/></svg>',
   book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3z"/><path d="M18 4h1v13"/></svg>',
+  trackpad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8M12 8l-2 2M12 8l2 2"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.7 2.7 2.7 15.3 0 18M12 3c-2.7 2.7-2.7 15.3 0 18"/></svg>',
 };
 
@@ -292,6 +293,11 @@ const APPS = {
       teardown = () => clearInterval(timer);
     },
   },
+  // the phone as the desk's trackpad, over Bluetooth: only where the browser has Bluetooth
+  remote: {
+    name: "Remote", glyph: I.trackpad, needs: () => !!navigator.bluetooth, dock: false, // five would not fit a narrow phone's dock
+    open() { steerDesk(); },
+  },
   settings: {
     name: "Settings", glyph: I.settings,
     async open() {
@@ -343,9 +349,6 @@ const APPS = {
         const give = row(I.settings, "Give the desk a WiFi over Bluetooth", "test");
         give.onclick = () => { inside(() => APPS.settings.open()); giveWifi(); };
         list.append(give);
-        const steer = row(I.status, "Steer the desk's screen over Bluetooth", "test");
-        steer.onclick = () => steerDesk();
-        list.append(steer);
       }
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
@@ -404,7 +407,6 @@ function steerDesk() {
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
   const stop = () => { device?.gatt.disconnect(); device = steer = null; };
-  inside(() => { teardown(); teardown = null; APPS.settings.open(); });
   teardown = () => { clearInterval(rate); stop(); };
   const pad = el("div");
   pad.style.cssText = "height:52vh;margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none";
@@ -478,7 +480,7 @@ function steerDesk() {
   left.onclick = () => press("c l");
   right.onclick = () => press("c r");
   const form = el("div", "m-pad");
-  form.append(text("div", "m-muted", "STEER THE DESK'S SCREEN"), el("div", "", "&nbsp;"), go, pad, buttons, said, pace);
+  form.append(go, pad, buttons, said, pace);
   body.replaceChildren(form);
 }
 
@@ -498,7 +500,10 @@ function tile(id) {
   b.onclick = () => openApp(id);
   return b;
 }
-for (const id of Object.keys(APPS)) { document.getElementById("grid").append(tile(id)); document.getElementById("dock-tiles").append(tile(id)); }
+for (const id of Object.keys(APPS).filter(id => !APPS[id].needs || APPS[id].needs())) {
+  document.getElementById("grid").append(tile(id));
+  if (APPS[id].dock !== false) document.getElementById("dock-tiles").append(tile(id));
+}
 async function badges() {
   const n = (await all("waiting")).length;
   for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n; b.textContent = n; }
