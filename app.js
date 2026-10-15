@@ -99,6 +99,27 @@ async function askBluetooth(step) {
   } finally { device.gatt.disconnect(); }
 }
 
+// give the desk a WiFi over Bluetooth: it joins while the phone stays connected, then says how it went.
+// EXPERIMENT: the desk takes this from any phone near it for now; who may is to be settled later.
+const BT_JOIN = "d35c0003-5e5a-4d3e-9b1f-6c0de5c0de01";
+async function joinBluetooth(ssid, password, step) {
+  const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
+  step("connecting to " + (device.name || "the desk"));
+  try {
+    const join = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_JOIN);
+    const read = async () => JSON.parse(new TextDecoder().decode(await join.readValue()));
+    await join.writeValueWithResponse(new TextEncoder().encode(JSON.stringify({ ssid, password })));
+    step("sent; the desk is trying “" + ssid + "”");
+    for (let s = 0; s < 180; s += 2) { // desk-wifi waits up to a minute per try, and may try twice
+      await new Promise(r => setTimeout(r, 2000));
+      const it = await read();
+      if (it.state === "done") return it; // {ssid, ip, joined, error}
+      step(`the desk is trying “${ssid}” (${s + 2} s)`);
+    }
+    throw new Error("the desk did not say how it went");
+  } finally { device.gatt.disconnect(); }
+}
+
 // hand the waiting links over, then bring back the articles this phone doesn't have yet
 let syncing = false;
 async function sync(loud) {
@@ -305,6 +326,9 @@ const APPS = {
           } finally { ask.busy = false; }
         };
         list.append(ask);
+        const give = row(I.settings, "Give the desk a WiFi over Bluetooth", "test");
+        give.onclick = () => { back = () => APPS.settings.open(); giveWifi(); };
+        list.append(give);
       }
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
@@ -320,6 +344,37 @@ const APPS = {
 
 // a link is removed on the second tap, so a slip of the thumb doesn't lose it
 let armed = null;
+// the WiFi to give the desk: a name, a password, and what the desk says as it goes
+function giveWifi() {
+  const form = el("div", "m-pad"), field = (placeholder, type) => {
+    const i = Object.assign(el("input", "m-input"), { placeholder, type, autocapitalize: "off", spellcheck: false });
+    i.style.cssText = "display:block;width:100%;margin-bottom:8px";
+    return i;
+  };
+  const ssid = field("network name", "text"), password = field("password (none for an open network)", "password");
+  const send = Object.assign(text("button", "m-btn primary", "SEND OVER BLUETOOTH"), { type: "button" });
+  const said = text("div", "m-muted", "The desk joins it while the phone stays on its own network. A wrong password puts back what the desk knew before.");
+  said.style.marginTop = "12px";
+  send.onclick = async () => {
+    if (!ssid.value.trim()) return ssid.focus();
+    send.disabled = true;
+    try {
+      const it = await joinBluetooth(ssid.value.trim(), password.value, t => { said.textContent = t; });
+      if (it.error) { said.textContent = it.error; toast("The desk did not join “" + ssid.value.trim() + "”", false); }
+      else if (it.joined) {
+        await put("settings", it.ip, "desk");
+        said.textContent = `The desk is on “${it.ssid}” at ${it.ip}. Saved as its address.`;
+        toast("The desk joined “" + it.ssid + "”", true); ping();
+      } else said.textContent = `The desk knows “${ssid.value.trim()}” now, but stays on “${it.ssid}”, which is also in range. It moves when that one is gone.`;
+    } catch (e) {
+      said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message;
+    } finally { send.disabled = false; }
+  };
+  form.append(text("div", "m-muted", "GIVE THE DESK A WIFI"), el("div", "", "&nbsp;"), ssid, password, send, said);
+  body.replaceChildren(form);
+  ssid.focus();
+}
+
 function confirmRemove(r, w) {
   if (armed === w.url) { armed = null; return true; }
   armed = w.url;
