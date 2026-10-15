@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#001a0d">
+<title>desk bluetooth</title>
+<link rel="icon" href="icon-192.png">
+<style>
+  :root { --bg: #001a0d; --fg: #3bff88; --muted: #2a9c5a; --line: #0f5a30; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; }
+  h1 { font-size: 16px; font-weight: 400; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  button { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--fg); padding: 10px 14px; margin-bottom: 12px; }
+  pre { margin: 0; padding: 12px; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>desk · bluetooth test</h1>
+<p>Asks the desk for its WiFi address over Bluetooth, then checks the desk answers there. Open in Chrome; Bluetooth on.</p>
+<button id="go">Ask the desk over Bluetooth</button>
+<pre id="out">ready</pre>
+<script>
+// the desk's Bluetooth service and the one value it gives: its address on the WiFi it is on
+const SERVICE = "d35c0001-5e5a-4d3e-9b1f-6c0de5c0de01", ADDRESS = "d35c0002-5e5a-4d3e-9b1f-6c0de5c0de01";
+const out = document.getElementById("out"), say = t => { out.textContent += "\n" + t; };
+document.getElementById("go").onclick = async () => {
+  out.textContent = navigator.bluetooth ? "asking…" : "this browser has no Web Bluetooth";
+  if (!navigator.bluetooth) return;
+  const t = performance.now(), ms = () => Math.round(performance.now() - t) + " ms";
+  try {
+    const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
+    say("picked " + (device.name || "a device") + " (" + ms() + ")");
+    const server = await device.gatt.connect();
+    say("connected (" + ms() + ")");
+    const value = await (await (await server.getPrimaryService(SERVICE)).getCharacteristic(ADDRESS)).readValue();
+    const at = new TextDecoder().decode(value).replace(/[^\x20-\x7e]/g, "");
+    say("address: " + at + " (" + ms() + ")");
+    device.gatt.disconnect();
+    try {
+      const hello = await (await fetch("http://" + at + "/api/hello", { signal: AbortSignal.timeout(5000) })).json();
+      say("the desk answers there: " + JSON.stringify(hello));
+    } catch (e) { say("the desk does not answer at " + at + ": " + e.message); }
+  } catch (e) { say("failed: " + e.name + ": " + e.message); }
+};
+</script>
+</body>
+</html>
