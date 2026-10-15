@@ -59,6 +59,34 @@ async function desk(path, body) {
   } finally { clearTimeout(timer); }
 }
 
+// ---- finding the desk on a new network: a page cannot list what is on the network, so it knocks
+// on every address of the likely ones and keeps the first that says it is the desk ----
+const NETS = ["192.168.1", "192.168.0", "10.0.0", "192.168.2", "10.0.1", "192.168.178", "192.168.68", "192.168.86",
+  "192.168.43", "172.20.10", "10.42.0", "192.168.100", "192.168.10", "192.168.50"];
+async function knock(hosts, ms) {
+  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms);
+  try {
+    return await Promise.any(hosts.map(async host => {
+      const data = await (await fetch("http://" + host + "/api/hello", { signal: stop.signal })).json();
+      if (!data.desk) throw new Error("not the desk");
+      return host;
+    }));
+  } catch { return null; } finally { clearTimeout(timer); stop.abort(); }
+}
+async function hunt(step) {
+  const at = await setting("desk"), mine = /^(\d+\.\d+\.\d+)\.\d+$/.exec(at || "")?.[1];
+  step("trying the names");
+  const named = await knock([...new Set([at, "desk.lan", "perma.local"].filter(Boolean))], 3000);
+  if (named) return named;
+  const nets = [...new Set([mine, ...NETS].filter(Boolean))];
+  for (const [i, net] of nets.entries()) {
+    step(`looking on ${net}.x (${i + 1} of ${nets.length})`);
+    const found = await knock(Array.from({ length: 254 }, (_, n) => net + "." + (n + 1)), 3000);
+    if (found) return found;
+  }
+  return null;
+}
+
 // hand the waiting links over, then bring back the articles this phone doesn't have yet
 let syncing = false;
 async function sync(loud) {
@@ -234,6 +262,17 @@ const APPS = {
       where.append(text("div", "m-muted", "WHERE THE DESK IS"), el("div", "", "&nbsp;"), line);
       const list = el("div", "m-list");
       const kv = (k, v) => { const r = el("div", "m-kv"); r.append(text("span", "m-muted", k), text("b", "", v)); return r; };
+      const seek = row(I.globe, "Find the desk on this network", "tap");
+      seek.onclick = async () => {
+        if (seek.busy) return;
+        seek.busy = true;
+        const sub = seek.querySelector(".sub"), found = await hunt(t => { sub.textContent = t; });
+        seek.busy = false;
+        if (!found) { sub.textContent = "not found"; return toast("No desk answered on this network", false); }
+        await put("settings", found, "desk");
+        toast("Found the desk at " + found, true); ping(); if (open === "settings") APPS.settings.open();
+      };
+      list.append(seek);
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
       if (at) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + at + "/", "_blank", "noopener"); list.append(go); }
