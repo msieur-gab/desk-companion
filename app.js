@@ -172,6 +172,7 @@ function openApp(id) {
   APPS[id].open();
   pane.classList.add("open");
   pane.setAttribute("aria-hidden", "false");
+  if (!history.state?.pane) history.pushState({ pane: true }, ""); // the phone's back gesture closes the pane, not the app
 }
 function closeApp() {
   if (teardown) { teardown(); teardown = null; }
@@ -180,8 +181,15 @@ function closeApp() {
   scrim.classList.remove("open");
   pane.setAttribute("aria-hidden", "true");
 }
-document.getElementById("pane-back").onclick = () => back ? back() : closeApp();
-scrim.onclick = closeApp;
+// every way back goes through the history, so the arrow and the phone's gesture do the same thing
+addEventListener("popstate", () => {
+  if (!pane.classList.contains("open")) return;
+  if (back) { back(); history.pushState({ pane: true }, ""); } // a step back inside the app: the pane stays
+  else closeApp();
+});
+const goBack = () => history.state?.pane ? history.back() : back ? back() : closeApp();
+document.getElementById("pane-back").onclick = goBack;
+scrim.onclick = () => { back = null; goBack(); };
 
 const row = (icon, name, sub) => {
   const r = el("div", "m-item");
@@ -342,7 +350,7 @@ const APPS = {
       if (offer && !standalone) { const ins = row(I.settings, "Install on this phone"); ins.onclick = async () => { offer.prompt(); await offer.userChoice; APPS.settings.open(); }; list.append(ins); }
       body.replaceChildren(where, list, note(at ? "The address changes with the network. At home it is the desk's name on the router; elsewhere, the address its WiFi screen shows." : "Type the address the desk has on this network."));
     },
-    fresh() { APPS.settings.open(); },
+    fresh() { if (!back && !body.contains(document.activeElement)) APPS.settings.open(); }, // not over the WiFi or the trackpad, nor under a half-typed address
   },
 };
 
@@ -510,6 +518,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) ping
 
 // ---- start: a link shared from another app arrives in the address; it joins the waiting ones ----
 (async () => {
+  if (history.state?.pane) history.replaceState(null, ""); // a reload opens on the home screen
   navigator.serviceWorker?.register("sw.js").catch(() => {});
   navigator.storage?.persist?.(); // ask the phone not to clean the articles away
   const got = new URLSearchParams(location.search);
