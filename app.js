@@ -401,13 +401,25 @@ function giveWifi() {
 // click keeps its place among the moves. (Dragging a window from here: to do, see desk's TODO.md.)
 // EXPERIMENT: the desk takes this from any phone near it for now, as the WiFi.
 const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
+// the desk picked for the trackpad stays picked while the companion runs: back on the Remote, the phone
+// joins it again by itself, with no Bluetooth list (Android drops the link when the companion is left)
+let device = null, steer = null;
 function steerDesk() {
-  let device = null, steer = null, busy = false, dx = 0, dy = 0, wheel = 0, lines = [], sent = 0;
+  let busy = false, dx = 0, dy = 0, wheel = 0, lines = [], sent = 0;
   const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
-  const stop = () => { device?.gatt.disconnect(); device = steer = null; };
-  teardown = () => { clearInterval(rate); stop(); };
+  const stop = () => { device?.gatt.disconnect(); steer = null; };
+  const join = async () => {
+    go.disabled = true;
+    said.textContent = "connecting to " + (device.name || "the desk");
+    device.ongattserverdisconnected = () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; }; // this screen's, not a closed one's
+    if (!steer || !device.gatt.connected) steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
+    said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
+  };
+  const rejoin = () => { if (device && !document.hidden) join().catch(() => { stop(); go.disabled = false; said.textContent = "The desk did not answer. Tap Connect."; }); };
+  document.addEventListener("visibilitychange", rejoin);
+  teardown = () => { clearInterval(rate); document.removeEventListener("visibilitychange", rejoin); };
   const pad = el("div");
   pad.style.cssText = "height:52vh;margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none";
   const buttons = el("div", "m-row"), left = text("button", "m-btn", "LEFT"), right = text("button", "m-btn", "RIGHT");
@@ -432,11 +444,9 @@ function steerDesk() {
   go.onclick = async () => {
     go.disabled = true;
     try {
-      device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
-      said.textContent = "connecting to " + (device.name || "the desk");
-      device.addEventListener("gattserverdisconnected", () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; });
-      steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
-      said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
+      const picked = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
+      if (picked !== device) { stop(); device = picked; }
+      await join();
     } catch (e) {
       said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message;
       stop(); go.disabled = false;
@@ -482,6 +492,7 @@ function steerDesk() {
   const form = el("div", "m-pad");
   form.append(go, pad, buttons, said, pace);
   body.replaceChildren(form);
+  rejoin();
 }
 
 function confirmRemove(r, w) {
