@@ -329,6 +329,9 @@ const APPS = {
         const give = row(I.settings, "Give the desk a WiFi over Bluetooth", "test");
         give.onclick = () => { back = () => APPS.settings.open(); giveWifi(); };
         list.append(give);
+        const steer = row(I.status, "Steer the desk's screen over Bluetooth", "test");
+        steer.onclick = () => steerDesk();
+        list.append(steer);
       }
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
@@ -373,6 +376,91 @@ function giveWifi() {
   form.append(text("div", "m-muted", "GIVE THE DESK A WIFI"), el("div", "", "&nbsp;"), ssid, password, send, said);
   body.replaceChildren(form);
   ssid.focus();
+}
+
+// the phone as a trackpad for the desk on an HDMI screen, over Bluetooth (desk-bluetooth's "steer"):
+// drag moves, a quick tap clicks, two fingers scroll. A move is sent without an answer; while one is
+// on its way the next ones add up, so the phone sends as fast as the link takes and no faster.
+// EXPERIMENT: the desk takes this from any phone near it for now, as the WiFi.
+const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
+function steerDesk() {
+  let device = null, steer = null, busy = false, dx = 0, dy = 0, wheel = 0, clicks = [], sent = 0;
+  const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
+  const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
+  const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
+  const stop = () => { device?.gatt.disconnect(); device = steer = null; };
+  back = () => { clearInterval(rate); stop(); APPS.settings.open(); };
+  teardown = () => { clearInterval(rate); stop(); };
+  const pad = el("div");
+  pad.style.cssText = "height:52vh;margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none";
+  const buttons = el("div", "m-row"), left = text("button", "m-btn", "LEFT"), right = text("button", "m-btn", "RIGHT");
+  left.style.flex = right.style.flex = "1";
+  buttons.append(left, right);
+  const go = Object.assign(text("button", "m-btn primary", "CONNECT"), { type: "button" });
+  const pump = async () => {
+    if (busy || !steer) return;
+    busy = true;
+    try {
+      while (dx || dy || wheel || clicks.length) {
+        const lines = [...clicks.splice(0)];
+        if (dx || dy) lines.unshift(`m ${dx} ${dy}`);
+        if (wheel) lines.push(`s ${wheel}`);
+        dx = dy = wheel = 0;
+        await steer.writeValueWithoutResponse(new TextEncoder().encode(lines.join("\n")));
+        sent++;
+      }
+    } catch (e) { said.textContent = "Bluetooth: " + e.message; stop(); go.disabled = false; }
+    finally { busy = false; }
+  };
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
+      said.textContent = "connecting to " + (device.name || "the desk");
+      device.addEventListener("gattserverdisconnected", () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; });
+      steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
+      said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
+    } catch (e) {
+      said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message;
+      stop(); go.disabled = false;
+    }
+  };
+  const SPEED = 1.7; // screen pixels for one pixel of the pad; quicker strokes go further
+  let last = null, travel = 0, at = 0, two = false, rest = 0;
+  const point = e => ({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+  pad.addEventListener("touchstart", e => {
+    e.preventDefault();
+    if (e.touches.length > 1) two = true;
+    if (e.touches.length === 1) { two = false; travel = 0; at = Date.now(); }
+    last = point(e);
+  }, { passive: false });
+  pad.addEventListener("touchmove", e => {
+    e.preventDefault();
+    if (!last) return;
+    const p = point(e), mx = p.x - last.x, my = p.y - last.y;
+    last = p;
+    travel += Math.abs(mx) + Math.abs(my);
+    if (e.touches.length > 1) {
+      rest += my;
+      const notches = Math.trunc(rest / 12); // a wheel notch every 12 pixels; the content follows the fingers
+      if (notches) { wheel += notches; rest -= notches * 12; }
+    } else {
+      const k = SPEED * (1 + Math.min(1.5, Math.hypot(mx, my) / 20));
+      dx += Math.round(mx * k); dy += Math.round(my * k);
+    }
+    pump();
+  }, { passive: false });
+  pad.addEventListener("touchend", e => {
+    e.preventDefault();
+    if (e.touches.length) { last = point(e); return; }
+    if (!two && travel < 10 && Date.now() - at < 250) { clicks.push("c l"); pump(); }
+    last = null;
+  }, { passive: false });
+  left.onclick = () => { clicks.push("c l"); pump(); };
+  right.onclick = () => { clicks.push("c r"); pump(); };
+  const form = el("div", "m-pad");
+  form.append(text("div", "m-muted", "STEER THE DESK'S SCREEN"), el("div", "", "&nbsp;"), go, pad, buttons, said, pace);
+  body.replaceChildren(form);
 }
 
 function confirmRemove(r, w) {
