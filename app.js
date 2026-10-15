@@ -172,7 +172,13 @@ function openApp(id) {
   APPS[id].open();
   pane.classList.add("open");
   pane.setAttribute("aria-hidden", "false");
-  if (!history.state?.pane) history.pushState({ pane: true }, ""); // the phone's back gesture closes the pane, not the app
+  if (!history.state?.pane) history.pushState({ pane: 1 }, ""); // the phone's back gesture closes the pane, not the app
+}
+// a screen inside an app (an article, the WiFi, the trackpad) gets its own step in the history, added
+// on the tap that opens it: Chrome skips the steps a page adds without one, and back would leave the app
+function inside(leave) {
+  back = leave;
+  if (history.state?.pane === 1) history.pushState({ pane: 2 }, "");
 }
 function closeApp() {
   if (teardown) { teardown(); teardown = null; }
@@ -184,12 +190,11 @@ function closeApp() {
 // every way back goes through the history, so the arrow and the phone's gesture do the same thing
 addEventListener("popstate", () => {
   if (!pane.classList.contains("open")) return;
-  if (back) { back(); history.pushState({ pane: true }, ""); } // a step back inside the app: the pane stays
+  if (back && history.state?.pane) back(); // one screen up; the app stays open
   else closeApp();
 });
-const goBack = () => history.state?.pane ? history.back() : back ? back() : closeApp();
-document.getElementById("pane-back").onclick = goBack;
-scrim.onclick = () => { back = null; goBack(); };
+document.getElementById("pane-back").onclick = () => history.state?.pane ? history.back() : back ? back() : closeApp();
+scrim.onclick = () => history.state?.pane ? history.go(-history.state.pane) : closeApp();
 
 const row = (icon, name, sub) => {
   const r = el("div", "m-item");
@@ -219,7 +224,7 @@ const APPS = {
     fresh() { if (!back) APPS.reader.open(); },
     // one article: the front matter is the desk's (title, author, siteName, cover…), then markdown
     read(a) {
-      back = () => APPS.reader.open();
+      inside(() => APPS.reader.open());
       title.textContent = a.siteName || "Reader";
       const md = a.text.replace(/^---\n[\s\S]*?\n---\n?/, ""), out = el("div", "reader-body");
       const box = el("div", "", window.marked.parse(md, { gfm: true }));
@@ -336,7 +341,7 @@ const APPS = {
         };
         list.append(ask);
         const give = row(I.settings, "Give the desk a WiFi over Bluetooth", "test");
-        give.onclick = () => { back = () => APPS.settings.open(); giveWifi(); };
+        give.onclick = () => { inside(() => APPS.settings.open()); giveWifi(); };
         list.append(give);
         const steer = row(I.status, "Steer the desk's screen over Bluetooth", "test");
         steer.onclick = () => steerDesk();
@@ -399,7 +404,7 @@ function steerDesk() {
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
   const stop = () => { device?.gatt.disconnect(); device = steer = null; };
-  back = () => { teardown(); teardown = null; APPS.settings.open(); };
+  inside(() => { teardown(); teardown = null; APPS.settings.open(); });
   teardown = () => { clearInterval(rate); stop(); };
   const pad = el("div");
   pad.style.cssText = "height:52vh;margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none";
