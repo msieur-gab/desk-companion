@@ -87,6 +87,18 @@ async function hunt(step) {
   return null;
 }
 
+// ---- or ask the desk itself, over Bluetooth: it says where it is, on any WiFi (desk-bluetooth) ----
+const BT_SERVICE = "d35c0001-5e5a-4d3e-9b1f-6c0de5c0de01", BT_WHERE = "d35c0002-5e5a-4d3e-9b1f-6c0de5c0de01";
+async function askBluetooth(step) {
+  const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
+  step("connecting to " + (device.name || "the desk"));
+  try {
+    const server = await device.gatt.connect();
+    const value = await (await (await server.getPrimaryService(BT_SERVICE)).getCharacteristic(BT_WHERE)).readValue();
+    return JSON.parse(new TextDecoder().decode(value)); // {name, address, wifi}
+  } finally { device.gatt.disconnect(); }
+}
+
 // hand the waiting links over, then bring back the articles this phone doesn't have yet
 let syncing = false;
 async function sync(loud) {
@@ -268,11 +280,32 @@ const APPS = {
         seek.busy = true;
         const sub = seek.querySelector(".sub"), found = await hunt(t => { sub.textContent = t; });
         seek.busy = false;
-        if (!found) { sub.textContent = "not found"; return toast("No desk answered on this network", false); }
+        if (!found) { sub.textContent = "not found"; return toast(navigator.bluetooth ? "No desk answered on this network. Try asking it over Bluetooth" : "No desk answered on this network", false); }
         await put("settings", found, "desk");
         toast("Found the desk at " + found, true); ping(); if (open === "settings") APPS.settings.open();
       };
       list.append(seek);
+      if (navigator.bluetooth) {
+        const ask = row(I.share, "Ask the desk over Bluetooth", "tap");
+        ask.onclick = async () => {
+          if (ask.busy) return;
+          ask.busy = true;
+          const sub = ask.querySelector(".sub");
+          try {
+            const it = await askBluetooth(t => { sub.textContent = t; });
+            if (!it.address) { sub.textContent = "on no WiFi"; return toast("The desk is on no WiFi. Plug it into the phone to give it one", false); }
+            await put("settings", it.address, "desk");
+            sub.textContent = it.address;
+            const reach = await knock([it.address], 4000);
+            toast(`The desk is at ${it.address} on “${it.wifi}”` + (reach ? "" : ", but this phone can't reach it there. Is the phone on the same WiFi?"), !!reach);
+            ping(); if (open === "settings") APPS.settings.open();
+          } catch (e) {
+            sub.textContent = "tap";
+            if (e.name !== "NotFoundError") toast("Bluetooth: " + e.message, false); // NotFoundError: the list was closed
+          } finally { ask.busy = false; }
+        };
+        list.append(ask);
+      }
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
       if (at) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + at + "/", "_blank", "noopener"); list.append(go); }
