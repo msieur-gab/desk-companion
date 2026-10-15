@@ -444,6 +444,10 @@ function steerDesk() {
   go.onclick = async () => {
     go.disabled = true;
     try {
+      if (device) try { return await join(); } catch { // the desk picked before, if it still answers; if not, the
+        stop(); device = null; go.disabled = false;     // list on the next tap (this one may be too old by now to open it)
+        return void (said.textContent = "The desk did not answer. Tap Connect to pick it again.");
+      }
       const picked = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
       if (picked !== device) { stop(); device = picked; }
       await join();
