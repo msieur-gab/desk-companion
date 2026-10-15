@@ -282,6 +282,7 @@ const APPS = {
   settings: {
     name: "Settings", glyph: I.settings,
     async open() {
+      back = null; // back from Settings goes home, also after the WiFi or the trackpad set it
       const at = await setting("desk"), synced = await setting("synced");
       if (open !== "settings") return;
       const where = el("div", "m-pad"), line = el("div", "m-row");
@@ -390,7 +391,7 @@ function steerDesk() {
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
   const stop = () => { device?.gatt.disconnect(); device = steer = null; };
-  back = () => { clearInterval(rate); stop(); APPS.settings.open(); };
+  back = () => { teardown(); teardown = null; APPS.settings.open(); };
   teardown = () => { clearInterval(rate); stop(); };
   const pad = el("div");
   pad.style.cssText = "height:52vh;margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none";
