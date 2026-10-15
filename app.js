@@ -379,10 +379,9 @@ function giveWifi() {
 }
 
 // the phone as a trackpad for the desk on an HDMI screen, over Bluetooth (desk-bluetooth's "steer"):
-// drag moves, a quick tap clicks, two fingers scroll, and a tap then a touch held and dragged holds the
-// button down (as on a laptop's trackpad): that moves a window by its title bar. A move is sent
-// without an answer; while one is on its way the next ones add up, so the phone sends as fast as the
-// link takes and no faster. Presses and releases keep their place among the moves.
+// drag moves, a quick tap clicks, two fingers scroll. A move is sent without an answer; while one is
+// on its way the next ones add up, so the phone sends as fast as the link takes and no faster. A
+// click keeps its place among the moves. (Dragging a window from here: to do, see desk's TODO.md.)
 // EXPERIMENT: the desk takes this from any phone near it for now, as the WiFi.
 const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
 function steerDesk() {
@@ -421,7 +420,7 @@ function steerDesk() {
       said.textContent = "connecting to " + (device.name || "the desk");
       device.addEventListener("gattserverdisconnected", () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; });
       steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
-      said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll; tap then hold and drag to move a window.";
+      said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
     } catch (e) {
       said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message;
       stop(); go.disabled = false;
@@ -430,21 +429,14 @@ function steerDesk() {
   // screen pixels for one pixel of the pad; quicker strokes go further. 1.7 felt right at 1080p; the
   // kiosk is at 720p now, where a pixel is 1.5 times more of the screen
   const SPEED = 1.15;
-  // a button event goes after the moves made before it
+  // a click goes after the moves made before it
   const press = line => { if (dx || dy) { lines.push(`m ${dx} ${dy}`); dx = dy = 0; } lines.push(line); pump(); };
-  const hold = on => { holding = on; pad.style.borderColor = on ? "var(--accent,#0f0)" : ""; pad.style.borderWidth = on ? "3px" : ""; };
-  let last = null, travel = 0, at = 0, two = false, rest = 0, tapped = 0, tapAt = null, holding = false;
+  let last = null, travel = 0, at = 0, two = false, rest = 0;
   const point = e => ({ x: e.touches[0].clientX, y: e.touches[0].clientY });
   pad.addEventListener("touchstart", e => {
     e.preventDefault();
     if (e.touches.length > 1) two = true;
-    if (e.touches.length === 1) {
-      two = false; travel = 0; at = Date.now();
-      // a tap, then at once a touch on the same spot: the button stays down. Quick and close, so a
-      // finger put back to steer after a click doesn't grab
-      const p = point(e);
-      if (at - tapped < 200 && tapAt && Math.hypot(p.x - tapAt.x, p.y - tapAt.y) < 30) { hold(true); press("d l"); }
-    }
+    if (e.touches.length === 1) { two = false; travel = 0; at = Date.now(); }
     last = point(e);
   }, { passive: false });
   pad.addEventListener("touchmove", e => {
@@ -466,9 +458,7 @@ function steerDesk() {
   pad.addEventListener("touchend", e => {
     e.preventDefault();
     if (e.touches.length) { last = point(e); return; }
-    const tap = !two && travel < 10 && Date.now() - at < 250;
-    if (holding) { hold(false); press("u l"); tapped = 0; } // lifted: the button lets go
-    else if (tap) { press("c l"); tapped = Date.now(); tapAt = last; }
+    if (!two && travel < 10 && Date.now() - at < 250) press("c l");
     last = null;
   }, { passive: false });
   left.onclick = () => press("c l");
