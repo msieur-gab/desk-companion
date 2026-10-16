@@ -549,7 +549,7 @@ function steerDesk() {
 }
 
 // One deck, presented: which slide shows is the desk's (it keeps it for every screen); the phone sends
-// words ("next", "prev", "black", "open <deck>") and shows what the desk says back: the slide's notes
+// words ("next", "prev", "black", "full", "end", "open <deck>") and shows what the desk says back: the slide's notes
 // and the next one's picture. Over Bluetooth the words ride on the trackpad's value ("p next") and the
 // desk tells each change on its own value (slide); without Bluetooth, the same over the WiFi.
 const BT_SLIDE = "d35c0005-5e5a-4d3e-9b1f-6c0de5c0de01";
@@ -570,15 +570,26 @@ function present(deck) {
   prev.classList.remove("primary");
   pads.append(prev, next);
   const black = Object.assign(text("button", "m-btn", "BLACK"), { type: "button", onclick: () => say("black") });
+  const full = Object.assign(text("button", "m-btn", "WINDOW"), { type: "button", onclick: () => say("full") });
+  // END on the second tap, so a slip of the thumb doesn't stop the talk
+  let ending = null;
+  const end = Object.assign(text("button", "m-btn", "END"), { type: "button", onclick: () => {
+    if (ending) { clearTimeout(ending); ending = null; end.textContent = "END"; return say("end"); }
+    end.textContent = "TAP AGAIN TO END";
+    ending = setTimeout(() => { ending = null; end.textContent = "END"; }, 3000);
+  } });
+  const tools = el("div", "m-row");
+  for (const b of [black, full, end]) { b.style.flex = "1"; tools.append(b); }
+  tools.style.marginTop = "10px";
   const start = Object.assign(text("button", "m-btn primary", "SHOW THIS DECK ON THE DESK"), { type: "button", onclick: () => say("open " + deck.name) });
   const link = Object.assign(text("button", "m-btn", "CONNECT OVER BLUETOOTH"), { type: "button" });
   const said = text("div", "m-muted", "");
-  for (const b of [black, start, link]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+  for (const b of [start, link]) b.style.cssText = "display:block;width:100%;margin-top:10px";
   const urls = deck.thumbs.map(b => URL.createObjectURL(b));
   const draw = () => {
     const ours = now && now.d === deck.name;
     start.hidden = ours;
-    for (const e of [pads, black, nextLabel, pic]) e.hidden = !ours;
+    for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours;
     link.hidden = !navigator.bluetooth || !!ble;
     if (!now) { where.textContent = "not connected"; notes.textContent = ""; return; }
     if (!ours) { where.textContent = now.d ? "the desk shows " + now.d : "the desk shows no deck"; notes.textContent = ""; return; }
@@ -587,14 +598,15 @@ function present(deck) {
     nextLabel.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
     pic.hidden = now.i >= now.n;
     if (now.i < now.n) pic.src = urls[now.i];
-    black.textContent = now.b ? "SHOW THE SLIDE AGAIN" : "BLACK";
+    black.textContent = now.b ? "UNBLACK" : "BLACK";
+    full.textContent = now.f ? "WINDOW" : "FULL";
   };
   const got = s => { now = s; draw(); };
   // the words, one after the other: a GATT write can't start while another is on its way
   const say = words => {
     queue = queue.then(async () => {
       if (ble) await ble.steer.writeValueWithoutResponse(new TextEncoder().encode("p " + words));
-      else { const s = await desk("/api/slides", { do: words }); got({ d: s.deck, i: s.i, n: s.n, b: s.black }); }
+      else { const s = await desk("/api/slides", { do: words }); got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full }); }
     }).catch(e => { said.textContent = e.away ? "The desk is out of reach. Connect over Bluetooth." : (e.message || String(e)); });
   };
   const read = v => JSON.parse(new TextDecoder().decode(v));
@@ -622,7 +634,7 @@ function present(deck) {
       try {
         const s = await desk("/api/slides/now?after=" + seq, null, 30000);
         seq = s.seq;
-        if (!ble) got({ d: s.deck, i: s.i, n: s.n, b: s.black });
+        if (!ble) got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full });
       } catch { if (!gone) await new Promise(r => setTimeout(r, 3000)); }
     }
   })();
@@ -630,7 +642,7 @@ function present(deck) {
   teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
   title.textContent = deck.name;
   const form = el("div", "m-pad");
-  form.append(top, notes, nextLabel, pic, pads, black, start, link, said);
+  form.append(top, notes, nextLabel, pic, pads, tools, start, link, said);
   body.replaceChildren(form);
   draw();
   rejoin();
