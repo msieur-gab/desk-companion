@@ -569,10 +569,19 @@ function present(deck, slot) {
   top.append(where, clock);
   const notes = text("div", "", "");
   notes.style.cssText = "font-size:22px;line-height:1.35;margin:14px 0;min-height:22vh;white-space:pre-wrap";
-  const nextLabel = text("div", "m-muted", "NEXT");
-  const pic = el("img");
-  pic.alt = "";
-  pic.style.cssText = "display:block;width:62%;aspect-ratio:16/9;object-fit:contain;background:#000;border:1px solid var(--muted,#555);margin:6px 0 14px";
+  // the slide on show and the next one, side by side: facing the room, the phone says what the room sees and what comes
+  const shot = () => {
+    const box = el("div"), label = text("div", "m-muted", ""), img = el("img");
+    box.style.cssText = "flex:1;min-width:0";
+    img.alt = "";
+    img.style.cssText = "display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#000;border:1px solid var(--muted,#555);margin-top:4px";
+    box.append(label, img);
+    return { box, label, img };
+  };
+  const cur = shot(), nxt = shot(), shots = el("div", "m-row");
+  shots.style.cssText = "gap:8px;align-items:flex-start;margin:6px 0 14px";
+  shots.append(cur.box, nxt.box);
+  const picture = (s, i) => { s.img.hidden = !urls[i]; if (urls[i]) s.img.src = urls[i]; };
   const big = (label, words) => { const b = Object.assign(text("button", "m-btn primary", label), { type: "button", onclick: () => say(words) }); b.style.cssText = "flex:1;padding:22px 0;font-size:18px"; return b; };
   const pads = el("div", "m-row"), prev = big("PREV", "prev"), next = big("NEXT", "next");
   prev.classList.remove("primary");
@@ -618,16 +627,20 @@ function present(deck, slot) {
     if (!ours) {
       where.textContent = !now ? "not connected" : now.d ? "the desk shows " + now.d : "the desk shows no deck";
       notes.textContent = deck.notes[0] || "(no notes for this slide)";
-      nextLabel.textContent = `FIRST SLIDE · 1 / ${deck.count} · not on the desk yet`;
-      pic.hidden = !urls.length;
-      if (urls.length) pic.src = urls[0];
+      cur.label.textContent = "FIRST · not on the desk yet";
+      picture(cur, 0);
+      cur.img.style.opacity = 1;
+      nxt.label.textContent = deck.count > 1 ? "NEXT · 2" : "";
+      picture(nxt, 1);
       return;
     }
     where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : "") + (ble ? " · bluetooth" : " · wifi");
     notes.textContent = deck.notes[now.i - 1] || "(no notes for this slide)";
-    nextLabel.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
-    pic.hidden = now.i >= now.n;
-    if (now.i < now.n) pic.src = urls[now.i];
+    cur.label.textContent = "NOW · " + now.i + (now.b ? " · BLACK" : "");
+    picture(cur, now.i - 1);
+    cur.img.style.opacity = now.b ? 0.3 : 1; // blacked: dimmed here, black on the screen
+    nxt.label.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
+    picture(nxt, now.i < now.n ? now.i : -1);
     black.textContent = now.b ? "UNBLACK" : "BLACK";
     full.textContent = now.f ? "WINDOW" : "FULL";
   };
@@ -676,7 +689,7 @@ function present(deck, slot) {
   const timer = setInterval(tick, 1000);
   teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
   title.textContent = deck.name;
-  slot.replaceChildren(top, notes, nextLabel, pic, pads, tools, start, link, others, said);
+  slot.replaceChildren(top, notes, shots, pads, tools, start, link, others, said);
   if (shown) now = shown; // what this phone last heard, until the desk says again
   draw();
   tick();
