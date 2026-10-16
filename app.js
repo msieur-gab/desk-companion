@@ -697,13 +697,13 @@ async function deckList(slot) {
   slot.replaceChildren(decks.length ? list : note("No deck on this phone yet. Put a folder with its PDF in the desk's ~/Slides, then sync while the desk is in reach."));
 }
 
-// TRACKPAD | SLIDES on top of every screen of the Slides app: the trackpad is the only way to act on the
+// SLIDES | TRACKPAD on top of every screen of the Slides app: the trackpad is the only way to act on the
 // desk's screen, so it is one tap away whatever the slides are doing (the same pad as the Remote app,
 // which joins the desk this phone knows by itself). draw puts the slides' side (a deck, the list) in slot.
 let slidesTab = "slides";
 function slidesScreen(draw) {
   const tabs = el("div", "m-row"), toPad = text("button", "m-btn", "TRACKPAD"), toSlides = text("button", "m-btn", "SLIDES");
-  for (const b of [toPad, toSlides]) { b.type = "button"; b.style.flex = "1"; tabs.append(b); }
+  for (const b of [toSlides, toPad]) { b.type = "button"; b.style.flex = "1"; tabs.append(b); }
   tabs.style.cssText = "padding:12px 12px 0";
   const slot = el("div", "m-pad");
   const show = () => {
