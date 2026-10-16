@@ -559,7 +559,7 @@ function trackpad(write, ready, fail, height = "52vh") {
 // words ("next", "prev", "black", "full", "end", "open <deck>") and shows what the desk says back: the slide's notes
 // and the next one's picture. Over Bluetooth the words ride on the trackpad's value ("p next") and the
 // desk tells each change on its own value (slide); without Bluetooth, the same over the WiFi.
-// TRACKPAD swaps the buttons for the pad, on the same link, the notes staying on top.
+// Over Bluetooth, a toggle on top swaps two views on the same link: the remote, and the trackpad.
 const BT_SLIDE = "d35c0005-5e5a-4d3e-9b1f-6c0de5c0de01";
 let shown = null; // the slide on show as this phone last heard it ({d, i, n, b, f}): Slides opens on its deck
 let talk = null;  // { deck, at }: when the talk on show began, for the clock, kept across visits to this screen
@@ -604,32 +604,40 @@ function present(deck) {
     replacing = setTimeout(() => { replacing = null; start.textContent = "SHOW THIS DECK ON THE DESK"; }, 3000);
   };
   const link = Object.assign(text("button", "m-btn", "CONNECT OVER BLUETOOTH"), { type: "button" });
-  const mode = Object.assign(text("button", "m-btn", "TRACKPAD"), { type: "button", onclick: () => { padMode = !padMode; draw(); } });
+  // REMOTE | TRACKPAD: one view or the other, never both
+  const views = el("div", "m-row"), toRemote = text("button", "m-btn", "REMOTE"), toPad = text("button", "m-btn", "TRACKPAD");
+  toRemote.onclick = () => { padMode = false; draw(); };
+  toPad.onclick = () => { padMode = true; draw(); };
+  for (const b of [toRemote, toPad]) { b.type = "button"; b.style.flex = "1"; views.append(b); }
+  views.style.marginBottom = "12px";
   const others = Object.assign(text("button", "m-btn", "OTHER DECKS"), { type: "button", onclick: () => {
     teardown?.(); teardown = null;
     if (!back) inside(() => APPS.slides.open());
     deckList();
   } });
   const said = text("div", "m-muted", "");
-  for (const b of [start, link, mode, others]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+  for (const b of [start, link, others]) b.style.cssText = "display:block;width:100%;margin-top:10px";
   // the pad writes on the same queue as the words: a GATT write can't start while another is on its way
   const write = t => (queue = queue.catch(() => {}).then(() => ble.steer.writeValueWithoutResponse(new TextEncoder().encode(t))));
-  const pad = trackpad(write, () => !!ble, e => { said.textContent = "Bluetooth: " + e.message; }, "38vh");
+  const pad = trackpad(write, () => !!ble, e => { said.textContent = "Bluetooth: " + e.message; }, "60vh");
   const urls = deck.thumbs.map(b => URL.createObjectURL(b));
   const draw = () => {
     const ours = now && now.d === deck.name, onPad = ours && padMode && !!ble;
     start.hidden = ours;
-    for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours || onPad;
+    remote.hidden = onPad;
+    for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours;
     pad.box.hidden = !onPad;
-    mode.hidden = !ours || !ble;
-    mode.textContent = onPad ? "SLIDES" : "TRACKPAD";
+    views.hidden = !ours || !ble;
+    toRemote.classList.toggle("primary", !onPad);
+    toPad.classList.toggle("primary", onPad);
     link.hidden = !navigator.bluetooth || !!ble;
     if (!now) { where.textContent = "not connected"; notes.textContent = ""; return; }
     if (!ours) { where.textContent = now.d ? "the desk shows " + now.d : "the desk shows no deck"; notes.textContent = ""; return; }
+    if (onPad) return void (where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : ""));
     where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : "") + (ble ? " · bluetooth" : " · wifi");
     notes.textContent = deck.notes[now.i - 1] || "(no notes for this slide)";
     nextLabel.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
-    pic.hidden = onPad || now.i >= now.n;
+    pic.hidden = now.i >= now.n;
     if (now.i < now.n) pic.src = urls[now.i];
     black.textContent = now.b ? "UNBLACK" : "BLACK";
     full.textContent = now.f ? "WINDOW" : "FULL";
@@ -680,7 +688,9 @@ function present(deck) {
   teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
   title.textContent = deck.name;
   const form = el("div", "m-pad");
-  form.append(top, notes, nextLabel, pic, pads, pad.box, tools, mode, start, link, others, said);
+  const remote = el("div");
+  remote.append(notes, nextLabel, pic, pads, tools, start, link, others);
+  form.append(views, top, remote, pad.box, said);
   body.replaceChildren(form);
   if (shown) now = shown; // what this phone last heard, until the desk says again
   draw();
