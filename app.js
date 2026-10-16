@@ -335,15 +335,14 @@ const APPS = {
     // straight to the remote of the deck the desk shows (as last heard, or asked over the WiFi); the list otherwise
     async open() {
       back = null;
-      slidesTab = "slides";
       let on = shown?.d;
       if (!on) try { on = (await desk("/api/slides", null, 2500)).now.deck; } catch { /* not over the WiFi: the list */ }
       if (open !== "slides") return;
       const d = on && (await all("decks")).find(x => x.name === on);
       if (open !== "slides") return;
-      slidesScreen(d ? s => present(d, s) : deckList);
+      d ? present(d) : deckList();
     },
-    fresh() { if (!back && slidesTab === "slides" && !teardown) slidesScreen(deckList); }, // the list, after a sync
+    fresh() { if (!back && !teardown) deckList(); },
   },
   settings: {
     name: "Settings", glyph: I.settings,
@@ -451,7 +450,7 @@ const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
 // the desk picked for the trackpad stays picked while the companion runs: back on the Remote, the phone
 // joins it again by itself, with no Bluetooth list (Android drops the link when the companion is left)
 let device = null, steer = null;
-function steerDesk(slot) {
+function steerDesk() {
   const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const stop = () => { device?.gatt.disconnect(); steer = null; };
@@ -484,8 +483,9 @@ function steerDesk(slot) {
       stop(); go.disabled = false;
     }
   };
-  if (slot) slot.replaceChildren(go, pad.box, said, pace);
-  else { const form = el("div", "m-pad"); form.append(go, pad.box, said, pace); body.replaceChildren(form); }
+  const form = el("div", "m-pad");
+  form.append(go, pad.box, said, pace);
+  body.replaceChildren(form);
   rejoin();
 }
 
@@ -559,11 +559,14 @@ function trackpad(write, ready, fail, height = "52vh") {
 // words ("next", "prev", "black", "full", "end", "open <deck>") and shows what the desk says back: the slide's notes
 // and the next one's picture. Over Bluetooth the words ride on the trackpad's value ("p next") and the
 // desk tells each change on its own value (slide); without Bluetooth, the same over the WiFi.
+// REMOTE | TRACKPAD on top, always: two views on the same Bluetooth link. TRACKPAD connects the link
+// itself when there is none: the pad is the only way to act on the desk's screen.
 const BT_SLIDE = "d35c0005-5e5a-4d3e-9b1f-6c0de5c0de01";
 let shown = null; // the slide on show as this phone last heard it ({d, i, n, b, f}): Slides opens on its deck
 let talk = null;  // { deck, at }: when the talk on show began, for the clock, kept across visits to this screen
-function present(deck, slot) {
-  let now = null, ble = null, queue = Promise.resolve(), gone = false, seq = -1;
+function present(deck) {
+  teardown?.(); teardown = null; // the screen before, if it was a remote too
+  let now = null, ble = null, queue = Promise.resolve(), gone = false, seq = -1, padMode = false;
   const top = el("div", "m-row"), where = text("div", "m-muted", ""), clock = text("div", "m-muted", "");
   where.style.flex = "1";
   top.append(where, clock);
@@ -602,20 +605,41 @@ function present(deck, slot) {
     replacing = setTimeout(() => { replacing = null; start.textContent = "SHOW THIS DECK ON THE DESK"; }, 3000);
   };
   const link = Object.assign(text("button", "m-btn", "CONNECT OVER BLUETOOTH"), { type: "button" });
+  // REMOTE | TRACKPAD: one view or the other, never both
+  const views = el("div", "m-row"), toRemote = text("button", "m-btn", "REMOTE"), toPad = text("button", "m-btn", "TRACKPAD");
+  toRemote.onclick = () => { padMode = false; draw(); };
+  // the pad is the only way to act on the desk's screen: always there, and it brings its own link
+  toPad.onclick = () => {
+    padMode = true; draw();
+    if (ble) return;
+    if (!navigator.bluetooth) return void (said.textContent = "This browser has no Bluetooth: the trackpad needs it.");
+    join(!device).catch(e => { said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message; });
+  };
+  for (const b of [toRemote, toPad]) { b.type = "button"; b.style.flex = "1"; views.append(b); }
+  views.style.marginBottom = "12px";
   const others = Object.assign(text("button", "m-btn", "OTHER DECKS"), { type: "button", onclick: () => {
+    teardown?.(); teardown = null;
     if (!back) inside(() => APPS.slides.open());
-    slidesScreen(deckList);
+    deckList();
   } });
   const said = text("div", "m-muted", "");
   for (const b of [start, link, others]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+  // the pad writes on the same queue as the words: a GATT write can't start while another is on its way
+  const write = t => (queue = queue.catch(() => {}).then(() => ble.steer.writeValueWithoutResponse(new TextEncoder().encode(t))));
+  const pad = trackpad(write, () => !!ble, e => { said.textContent = "Bluetooth: " + e.message; }, "60vh");
   const urls = deck.thumbs.map(b => URL.createObjectURL(b));
   const draw = () => {
-    const ours = now && now.d === deck.name;
+    const ours = now && now.d === deck.name, onPad = padMode; // never waits on a talk or a link
     start.hidden = ours;
+    remote.hidden = onPad;
     for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours;
+    pad.box.hidden = !onPad;
+    toRemote.classList.toggle("primary", !onPad);
+    toPad.classList.toggle("primary", onPad);
     link.hidden = !navigator.bluetooth || !!ble;
     if (!now) { where.textContent = "not connected"; notes.textContent = ""; return; }
     if (!ours) { where.textContent = now.d ? "the desk shows " + now.d : "the desk shows no deck"; notes.textContent = ""; return; }
+    if (onPad) return void (where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : ""));
     where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : "") + (ble ? " · bluetooth" : " · wifi");
     notes.textContent = deck.notes[now.i - 1] || "(no notes for this slide)";
     nextLabel.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
@@ -669,7 +693,11 @@ function present(deck, slot) {
   const timer = setInterval(tick, 1000);
   teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
   title.textContent = deck.name;
-  slot.replaceChildren(top, notes, nextLabel, pic, pads, tools, start, link, others, said);
+  const form = el("div", "m-pad");
+  const remote = el("div");
+  remote.append(notes, nextLabel, pic, pads, tools, start, link, others);
+  form.append(views, top, remote, pad.box, said);
+  body.replaceChildren(form);
   if (shown) now = shown; // what this phone last heard, until the desk says again
   draw();
   tick();
@@ -677,38 +705,17 @@ function present(deck, slot) {
 }
 
 // the decks kept on this phone; the one the desk shows is marked, a tap opens a deck's remote
-async function deckList(slot) {
+async function deckList() {
   title.textContent = "Slides";
   const decks = (await all("decks")).sort((a, b) => a.name.localeCompare(b.name));
-  if (open !== "slides" || !slot.isConnected) return;
+  if (open !== "slides") return;
   const list = el("div", "m-list");
   for (const d of decks) {
     const r = row(I.slides, d.name, shown?.d === d.name ? `on the desk · ${shown.i} / ${shown.n}` : d.count + " slides");
-    r.onclick = () => slidesScreen(s => present(d, s)); // back, from there: to the talk on show (or out, with none)
+    r.onclick = () => present(d); // back, from there: to the remote of the talk on show (or out, with none)
     list.append(r);
   }
-  slot.replaceChildren(decks.length ? list : note("No deck on this phone yet. Put a folder with its PDF in the desk's ~/Slides, then sync while the desk is in reach."));
-}
-
-// TRACKPAD | SLIDES on top of every screen of the Slides app: the trackpad is the only way to act on the
-// desk's screen, so it is one tap away whatever the slides are doing (the same pad as the Remote app,
-// which joins the desk this phone knows by itself). draw puts the slides' side (a deck, the list) in slot.
-let slidesTab = "slides";
-function slidesScreen(draw) {
-  const tabs = el("div", "m-row"), toPad = text("button", "m-btn", "TRACKPAD"), toSlides = text("button", "m-btn", "SLIDES");
-  for (const b of [toPad, toSlides]) { b.type = "button"; b.style.flex = "1"; tabs.append(b); }
-  tabs.style.cssText = "padding:12px 12px 0";
-  const slot = el("div", "m-pad");
-  const show = () => {
-    teardown?.(); teardown = null; // the screen before: its link loop, its timers
-    toPad.classList.toggle("primary", slidesTab === "pad");
-    toSlides.classList.toggle("primary", slidesTab === "slides");
-    if (slidesTab === "pad") steerDesk(slot); else draw(slot);
-  };
-  toPad.onclick = () => { slidesTab = "pad"; show(); };
-  toSlides.onclick = () => { slidesTab = "slides"; show(); };
-  body.replaceChildren(tabs, slot);
-  show();
+  body.replaceChildren(decks.length ? list : note("No deck on this phone yet. Put a folder with its PDF in the desk's ~/Slides, then sync while the desk is in reach."));
 }
 
 function confirmRemove(r, w) {
