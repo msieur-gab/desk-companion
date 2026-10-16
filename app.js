@@ -1,7 +1,8 @@
 // The desk's companion on the phone. The look is symbios's mobile shell (status bar, springboard,
 // panes sliding in; css/mobile.css unchanged); the code is its own and small. Five apps: Reader (articles kept on this
 // phone, readable with no network), Shared (links shared to it, waiting for the desk), Monitor
-// (how the desk is doing), Remote (the phone as the desk's trackpad) and Settings (where the desk is, sync, install). The desk does the
+// (how the desk is doing), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
+// of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -22,16 +23,19 @@ const I = {
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11l6.6-3.6M8.2 13l6.6 3.6"/></svg>',
   book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3z"/><path d="M18 4h1v13"/></svg>',
   trackpad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8M12 8l-2 2M12 8l2 2"/></svg>',
+  slides: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M12 16v4M8 20h8M10 8l4 2-4 2z"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.7 2.7 2.7 15.3 0 18M12 3c-2.7 2.7-2.7 15.3 0 18"/></svg>',
 };
 
-// ---- what the phone keeps: articles, waiting links, and a few settings (IndexedDB) ----
+// ---- what the phone keeps: articles, waiting links, decks (previews and notes), and a few settings (IndexedDB) ----
 const db = new Promise((ok, no) => {
-  const r = indexedDB.open("desk", 1);
+  const r = indexedDB.open("desk", 2);
   r.onupgradeneeded = () => {
-    r.result.createObjectStore("articles", { keyPath: "file" });
-    r.result.createObjectStore("waiting", { keyPath: "url" });
-    r.result.createObjectStore("settings");
+    const have = r.result.objectStoreNames, make = (name, how) => have.contains(name) || r.result.createObjectStore(name, how);
+    make("articles", { keyPath: "file" });
+    make("waiting", { keyPath: "url" });
+    make("settings");
+    make("decks", { keyPath: "name" });
   };
   r.onsuccess = () => ok(r.result);
   r.onerror = () => no(r.error);
@@ -46,12 +50,13 @@ const drop = (name, key) => store(name, "readwrite", s => s.delete(key));
 const setting = key => store("settings", "readonly", s => s.get(key));
 
 // ---- the desk, over the local network (plain http: it has no name the world knows) ----
-async function desk(path, body) {
+async function desk(path, body, ms, blob) {
   const at = await setting("desk");
   if (!at) throw Object.assign(new Error("no desk address yet"), { away: true });
-  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), body ? 45000 : 8000);
+  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms || (body ? 45000 : 8000));
   try {
     const r = await fetch("http://" + at + path, { signal: stop.signal, ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}) });
+    if (blob && r.ok) return await r.blob(); // a picture, kept as it is
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(data.error || "the desk answered " + r.status), { refused: r.status === 422 });
     return data;
@@ -144,8 +149,10 @@ async function sync(loud) {
       const { text: body } = await desk("/api/fs/read?path=" + encodeURIComponent("Articles/" + card.file));
       await put("articles", { ...card, text: body });
     }
+    const decks = await syncDecks();
     await put("settings", Date.now(), "synced");
-    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : "")].filter(Boolean);
+    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
+      decks && decks + " deck" + (decks > 1 ? "s" : "")].filter(Boolean);
     if (bits.length || loud) toast(bits.length ? "Synced — " + bits.join(", ") : "Up to date", true);
   } catch (e) {
     if (loud) toast(e.away ? "The desk is out of reach" : "Couldn't sync (" + e.message + ")", false);
@@ -154,6 +161,30 @@ async function sync(loud) {
     badges();
     if (open && APPS[open].fresh) APPS[open].fresh();
   }
+}
+
+// the decks in the desk's ~/Slides, kept here for the talk: the notes and the small pictures, so the phone
+// shows them with only Bluetooth between it and the desk. The pictures are fetched again only when the
+// deck's PDF changed; the notes each time (they are small, and may have been edited). Answers how many
+// decks came in or changed pictures.
+async function syncDecks() {
+  let names;
+  try { names = (await desk("/api/slides")).decks; } catch (e) { if (e.away) throw e; return 0; } // a desk without slides yet
+  const kept = new Map((await all("decks")).map(d => [d.name, d]));
+  let changed = 0;
+  for (const name of names) {
+    const d = await desk("/api/slides/deck?name=" + encodeURIComponent(name), null, 120000); // the first time, the desk makes them
+    const old = kept.get(name);
+    let thumbs = old && old.made === d.made && old.thumbs.length === d.count ? old.thumbs : null;
+    if (!thumbs) {
+      thumbs = [];
+      for (let i = 1; i <= d.count; i++) thumbs.push(await desk("/api/fs/raw?path=" + encodeURIComponent(d.path + "t" + String(i).padStart(2, "0") + ".jpg"), null, 0, true));
+      changed++;
+    }
+    await put("decks", { name, count: d.count, made: d.made, notes: d.notes, thumbs });
+  }
+  for (const name of kept.keys()) if (!names.includes(name)) await drop("decks", name); // gone from the desk
+  return changed;
 }
 
 // ---- installing: the browser says when it is ready to; Settings then offers a button ----
@@ -297,6 +328,24 @@ const APPS = {
   remote: {
     name: "Remote", glyph: I.trackpad, needs: () => !!navigator.bluetooth, dock: false, // five would not fit a narrow phone's dock
     open() { steerDesk(); },
+  },
+  // the phone as the clicker of a deck on the desk: over Bluetooth where the browser has it, else over the WiFi
+  slides: {
+    name: "Slides", glyph: I.slides, dock: false,
+    async open() {
+      back = null;
+      title.textContent = "Slides";
+      const decks = (await all("decks")).sort((a, b) => a.name.localeCompare(b.name));
+      if (open !== "slides" || back) return;
+      const list = el("div", "m-list");
+      for (const d of decks) {
+        const r = row(I.slides, d.name, d.count + " slides");
+        r.onclick = () => { inside(() => { teardown?.(); teardown = null; APPS.slides.open(); }); present(d); }; // back stops following the desk
+        list.append(r);
+      }
+      body.replaceChildren(decks.length ? list : note("No deck on this phone yet. Put a folder with its PDF in the desk's ~/Slides, then sync while the desk is in reach."));
+    },
+    fresh() { if (!back) APPS.slides.open(); },
   },
   settings: {
     name: "Settings", glyph: I.settings,
@@ -496,6 +545,94 @@ function steerDesk() {
   const form = el("div", "m-pad");
   form.append(go, pad, buttons, said, pace);
   body.replaceChildren(form);
+  rejoin();
+}
+
+// One deck, presented: which slide shows is the desk's (it keeps it for every screen); the phone sends
+// words ("next", "prev", "black", "open <deck>") and shows what the desk says back: the slide's notes
+// and the next one's picture. Over Bluetooth the words ride on the trackpad's value ("p next") and the
+// desk tells each change on its own value (slide); without Bluetooth, the same over the WiFi.
+const BT_SLIDE = "d35c0005-5e5a-4d3e-9b1f-6c0de5c0de01";
+function present(deck) {
+  let now = null, ble = null, queue = Promise.resolve(), gone = false, seq = -1;
+  const started = Date.now();
+  const top = el("div", "m-row"), where = text("div", "m-muted", ""), clock = text("div", "m-muted", "0:00");
+  where.style.flex = "1";
+  top.append(where, clock);
+  const notes = text("div", "", "");
+  notes.style.cssText = "font-size:22px;line-height:1.35;margin:14px 0;min-height:22vh;white-space:pre-wrap";
+  const nextLabel = text("div", "m-muted", "NEXT");
+  const pic = el("img");
+  pic.alt = "";
+  pic.style.cssText = "display:block;width:62%;aspect-ratio:16/9;object-fit:contain;background:#000;border:1px solid var(--muted,#555);margin:6px 0 14px";
+  const big = (label, words) => { const b = Object.assign(text("button", "m-btn primary", label), { type: "button", onclick: () => say(words) }); b.style.cssText = "flex:1;padding:22px 0;font-size:18px"; return b; };
+  const pads = el("div", "m-row"), prev = big("PREV", "prev"), next = big("NEXT", "next");
+  prev.classList.remove("primary");
+  pads.append(prev, next);
+  const black = Object.assign(text("button", "m-btn", "BLACK"), { type: "button", onclick: () => say("black") });
+  const start = Object.assign(text("button", "m-btn primary", "SHOW THIS DECK ON THE DESK"), { type: "button", onclick: () => say("open " + deck.name) });
+  const link = Object.assign(text("button", "m-btn", "CONNECT OVER BLUETOOTH"), { type: "button" });
+  const said = text("div", "m-muted", "");
+  for (const b of [black, start, link]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+  const urls = deck.thumbs.map(b => URL.createObjectURL(b));
+  const draw = () => {
+    const ours = now && now.d === deck.name;
+    start.hidden = ours;
+    for (const e of [pads, black, nextLabel, pic]) e.hidden = !ours;
+    link.hidden = !navigator.bluetooth || !!ble;
+    if (!now) { where.textContent = "not connected"; notes.textContent = ""; return; }
+    if (!ours) { where.textContent = now.d ? "the desk shows " + now.d : "the desk shows no deck"; notes.textContent = ""; return; }
+    where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : "") + (ble ? " · bluetooth" : " · wifi");
+    notes.textContent = deck.notes[now.i - 1] || "(no notes for this slide)";
+    nextLabel.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
+    pic.hidden = now.i >= now.n;
+    if (now.i < now.n) pic.src = urls[now.i];
+    black.textContent = now.b ? "SHOW THE SLIDE AGAIN" : "BLACK";
+  };
+  const got = s => { now = s; draw(); };
+  // the words, one after the other: a GATT write can't start while another is on its way
+  const say = words => {
+    queue = queue.then(async () => {
+      if (ble) await ble.steer.writeValueWithoutResponse(new TextEncoder().encode("p " + words));
+      else { const s = await desk("/api/slides", { do: words }); got({ d: s.deck, i: s.i, n: s.n, b: s.black }); }
+    }).catch(e => { said.textContent = e.away ? "The desk is out of reach. Connect over Bluetooth." : (e.message || String(e)); });
+  };
+  const read = v => JSON.parse(new TextDecoder().decode(v));
+  // Bluetooth: the desk picked for the Remote, or picked here; the slide read once, then each change told
+  const join = async pick => {
+    if (pick || !device) { const d = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] }); if (d !== device) { device?.gatt.disconnect(); device = d; } }
+    said.textContent = "connecting to " + (device.name || "the desk");
+    const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE);
+    const [s, slide] = await Promise.all([service.getCharacteristic(BT_STEER), service.getCharacteristic(BT_SLIDE)]);
+    steer = s;
+    slide.oncharacteristicvaluechanged = e => got(read(e.target.value));
+    await slide.startNotifications();
+    ble = { steer: s, slide };
+    device.ongattserverdisconnected = () => { ble = null; steer = null; said.textContent = "Bluetooth dropped. Tap Connect, or stay on the WiFi."; draw(); };
+    got(read(await slide.readValue()));
+    said.textContent = "";
+  };
+  link.onclick = () => join(true).catch(e => { said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message; });
+  const rejoin = () => { if (device && !ble && !document.hidden) join(false).catch(() => {}); };
+  document.addEventListener("visibilitychange", rejoin);
+  // the WiFi, while Bluetooth isn't there: wait for the next change, as the desk's own screens do
+  (async () => {
+    while (!gone) {
+      if (ble) { await new Promise(r => setTimeout(r, 1000)); continue; }
+      try {
+        const s = await desk("/api/slides/now?after=" + seq, null, 30000);
+        seq = s.seq;
+        if (!ble) got({ d: s.deck, i: s.i, n: s.n, b: s.black });
+      } catch { if (!gone) await new Promise(r => setTimeout(r, 3000)); }
+    }
+  })();
+  const timer = setInterval(() => { const t = Math.floor((Date.now() - started) / 1000); clock.textContent = Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); }, 1000);
+  teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
+  title.textContent = deck.name;
+  const form = el("div", "m-pad");
+  form.append(top, notes, nextLabel, pic, pads, black, start, link, said);
+  body.replaceChildren(form);
+  draw();
   rejoin();
 }
 
