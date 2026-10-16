@@ -559,8 +559,8 @@ function trackpad(write, ready, fail, height = "52vh") {
 // words ("next", "prev", "black", "full", "end", "open <deck>") and shows what the desk says back: the slide's notes
 // and the next one's picture. Over Bluetooth the words ride on the trackpad's value ("p next") and the
 // desk tells each change on its own value (slide); without Bluetooth, the same over the WiFi.
-// Over Bluetooth, a toggle on top swaps two views on the same link: the remote, and the trackpad (also
-// before the deck is shown, to set the desk up).
+// REMOTE | TRACKPAD on top, always: two views on the same Bluetooth link. TRACKPAD connects the link
+// itself when there is none: the pad is the only way to act on the desk's screen.
 const BT_SLIDE = "d35c0005-5e5a-4d3e-9b1f-6c0de5c0de01";
 let shown = null; // the slide on show as this phone last heard it ({d, i, n, b, f}): Slides opens on its deck
 let talk = null;  // { deck, at }: when the talk on show began, for the clock, kept across visits to this screen
@@ -608,7 +608,13 @@ function present(deck) {
   // REMOTE | TRACKPAD: one view or the other, never both
   const views = el("div", "m-row"), toRemote = text("button", "m-btn", "REMOTE"), toPad = text("button", "m-btn", "TRACKPAD");
   toRemote.onclick = () => { padMode = false; draw(); };
-  toPad.onclick = () => { padMode = true; draw(); };
+  // the pad is the only way to act on the desk's screen: always there, and it brings its own link
+  toPad.onclick = () => {
+    padMode = true; draw();
+    if (ble) return;
+    if (!navigator.bluetooth) return void (said.textContent = "This browser has no Bluetooth: the trackpad needs it.");
+    join(!device).catch(e => { said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message; });
+  };
   for (const b of [toRemote, toPad]) { b.type = "button"; b.style.flex = "1"; views.append(b); }
   views.style.marginBottom = "12px";
   const others = Object.assign(text("button", "m-btn", "OTHER DECKS"), { type: "button", onclick: () => {
@@ -623,12 +629,11 @@ function present(deck) {
   const pad = trackpad(write, () => !!ble, e => { said.textContent = "Bluetooth: " + e.message; }, "60vh");
   const urls = deck.thumbs.map(b => URL.createObjectURL(b));
   const draw = () => {
-    const ours = now && now.d === deck.name, onPad = padMode && !!ble; // the pad needs only the link, not a talk
+    const ours = now && now.d === deck.name, onPad = padMode; // never waits on a talk or a link
     start.hidden = ours;
     remote.hidden = onPad;
     for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours;
     pad.box.hidden = !onPad;
-    views.hidden = !ble;
     toRemote.classList.toggle("primary", !onPad);
     toPad.classList.toggle("primary", onPad);
     link.hidden = !navigator.bluetooth || !!ble;

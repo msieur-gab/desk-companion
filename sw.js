@@ -1,7 +1,7 @@
 // Keeps the companion itself on the phone, so it opens with no network. The network copy wins
 // when there is one; the kept copy answers when there is none. The articles are not here: they
 // live in the phone's database (see app.js).
-const KEPT = "desk-companion-12";
+const KEPT = "desk-companion-13";
 const SHELL = ["./", "app.js", "css/fonts.css", "css/theme.css", "css/mobile.css", "marked.min.js", "fonts/DepartureMono-Regular.woff2", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => e.waitUntil(caches.open(KEPT).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
