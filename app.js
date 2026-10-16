@@ -332,20 +332,17 @@ const APPS = {
   // the phone as the clicker of a deck on the desk: over Bluetooth where the browser has it, else over the WiFi
   slides: {
     name: "Slides", glyph: I.slides, dock: false,
+    // straight to the remote of the deck the desk shows (as last heard, or asked over the WiFi); the list otherwise
     async open() {
       back = null;
-      title.textContent = "Slides";
-      const decks = (await all("decks")).sort((a, b) => a.name.localeCompare(b.name));
-      if (open !== "slides" || back) return;
-      const list = el("div", "m-list");
-      for (const d of decks) {
-        const r = row(I.slides, d.name, d.count + " slides");
-        r.onclick = () => { inside(() => { teardown?.(); teardown = null; APPS.slides.open(); }); present(d); }; // back stops following the desk
-        list.append(r);
-      }
-      body.replaceChildren(decks.length ? list : note("No deck on this phone yet. Put a folder with its PDF in the desk's ~/Slides, then sync while the desk is in reach."));
+      let on = shown?.d;
+      if (!on) try { on = (await desk("/api/slides", null, 2500)).now.deck; } catch { /* not over the WiFi: the list */ }
+      if (open !== "slides") return;
+      const d = on && (await all("decks")).find(x => x.name === on);
+      if (open !== "slides") return;
+      d ? present(d) : deckList();
     },
-    fresh() { if (!back) APPS.slides.open(); },
+    fresh() { if (!back && !teardown) deckList(); },
   },
   settings: {
     name: "Settings", glyph: I.settings,
@@ -454,11 +451,12 @@ const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
 // joins it again by itself, with no Bluetooth list (Android drops the link when the companion is left)
 let device = null, steer = null;
 function steerDesk() {
-  let busy = false, dx = 0, dy = 0, wheel = 0, lines = [], sent = 0;
   const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
-  const rate = setInterval(() => { pace.textContent = steer ? sent + " sends a second" : ""; sent = 0; }, 1000);
   const stop = () => { device?.gatt.disconnect(); steer = null; };
+  const pad = trackpad(t => steer.writeValueWithoutResponse(new TextEncoder().encode(t)), () => !!steer,
+    e => { said.textContent = "Bluetooth: " + e.message; stop(); go.disabled = false; });
+  const rate = setInterval(() => { pace.textContent = steer ? pad.rate() + " sends a second" : ""; }, 1000);
   const join = async () => {
     go.disabled = true;
     said.textContent = "connecting to " + (device.name || "the desk");
@@ -469,27 +467,7 @@ function steerDesk() {
   const rejoin = () => { if (device && !document.hidden) join().catch(() => { stop(); go.disabled = false; said.textContent = "The desk did not answer. Tap Connect."; }); };
   document.addEventListener("visibilitychange", rejoin);
   teardown = () => { clearInterval(rate); document.removeEventListener("visibilitychange", rejoin); };
-  const pad = el("div");
-  pad.style.cssText = "height:52vh;margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none";
-  const buttons = el("div", "m-row"), left = text("button", "m-btn", "LEFT"), right = text("button", "m-btn", "RIGHT");
-  left.style.flex = right.style.flex = "1";
-  buttons.append(left, right);
   const go = Object.assign(text("button", "m-btn primary", "CONNECT"), { type: "button" });
-  const pump = async () => {
-    if (busy || !steer) return;
-    busy = true;
-    try {
-      while (dx || dy || wheel || lines.length) {
-        const out = lines.splice(0);
-        if (dx || dy) out.push(`m ${dx} ${dy}`);
-        if (wheel) out.push(`s ${wheel}`);
-        dx = dy = wheel = 0;
-        await steer.writeValueWithoutResponse(new TextEncoder().encode(out.join("\n")));
-        sent++;
-      }
-    } catch (e) { said.textContent = "Bluetooth: " + e.message; stop(); go.disabled = false; }
-    finally { busy = false; }
-  };
   go.onclick = async () => {
     go.disabled = true;
     try {
@@ -504,6 +482,36 @@ function steerDesk() {
       said.textContent = e.name === "NotFoundError" ? "No desk picked." : "Bluetooth: " + e.message;
       stop(); go.disabled = false;
     }
+  };
+  const form = el("div", "m-pad");
+  form.append(go, pad.box, said, pace);
+  body.replaceChildren(form);
+  rejoin();
+}
+
+// The pad itself, for the Remote and for the Slides remote: write sends lines of text over the link,
+// ready says whether there is one, fail is told when a send fails. Answers { box, rate }.
+function trackpad(write, ready, fail, height = "52vh") {
+  let busy = false, dx = 0, dy = 0, wheel = 0, lines = [], sent = 0;
+  const pad = el("div");
+  pad.style.cssText = `height:${height};margin:12px 0;border:1px solid var(--muted,#555);border-radius:12px;touch-action:none`;
+  const buttons = el("div", "m-row"), left = text("button", "m-btn", "LEFT"), right = text("button", "m-btn", "RIGHT");
+  left.style.flex = right.style.flex = "1";
+  buttons.append(left, right);
+  const pump = async () => {
+    if (busy || !ready()) return;
+    busy = true;
+    try {
+      while (dx || dy || wheel || lines.length) {
+        const out = lines.splice(0);
+        if (dx || dy) out.push(`m ${dx} ${dy}`);
+        if (wheel) out.push(`s ${wheel}`);
+        dx = dy = wheel = 0;
+        await write(out.join("\n"));
+        sent++;
+      }
+    } catch (e) { fail(e); }
+    finally { busy = false; }
   };
   // screen pixels for one pixel of the pad; quicker strokes go further. 1.7 felt right at 1080p; the
   // kiosk is at 720p now, where a pixel is 1.5 times more of the screen
@@ -542,21 +550,23 @@ function steerDesk() {
   }, { passive: false });
   left.onclick = () => press("c l");
   right.onclick = () => press("c r");
-  const form = el("div", "m-pad");
-  form.append(go, pad, buttons, said, pace);
-  body.replaceChildren(form);
-  rejoin();
+  const box = el("div");
+  box.append(pad, buttons);
+  return { box, rate: () => { const n = sent; sent = 0; return n; } };
 }
 
 // One deck, presented: which slide shows is the desk's (it keeps it for every screen); the phone sends
 // words ("next", "prev", "black", "full", "end", "open <deck>") and shows what the desk says back: the slide's notes
 // and the next one's picture. Over Bluetooth the words ride on the trackpad's value ("p next") and the
 // desk tells each change on its own value (slide); without Bluetooth, the same over the WiFi.
+// TRACKPAD swaps the buttons for the pad, on the same link, the notes staying on top.
 const BT_SLIDE = "d35c0005-5e5a-4d3e-9b1f-6c0de5c0de01";
+let shown = null; // the slide on show as this phone last heard it ({d, i, n, b, f}): Slides opens on its deck
+let talk = null;  // { deck, at }: when the talk on show began, for the clock, kept across visits to this screen
 function present(deck) {
-  let now = null, ble = null, queue = Promise.resolve(), gone = false, seq = -1;
-  const started = Date.now();
-  const top = el("div", "m-row"), where = text("div", "m-muted", ""), clock = text("div", "m-muted", "0:00");
+  teardown?.(); teardown = null; // the screen before, if it was a remote too
+  let now = null, ble = null, queue = Promise.resolve(), gone = false, seq = -1, padMode = false;
+  const top = el("div", "m-row"), where = text("div", "m-muted", ""), clock = text("div", "m-muted", "");
   where.style.flex = "1";
   top.append(where, clock);
   const notes = text("div", "", "");
@@ -572,42 +582,69 @@ function present(deck) {
   const black = Object.assign(text("button", "m-btn", "BLACK"), { type: "button", onclick: () => say("black") });
   const full = Object.assign(text("button", "m-btn", "WINDOW"), { type: "button", onclick: () => say("full") });
   // END on the second tap, so a slip of the thumb doesn't stop the talk
-  let ending = null;
-  const end = Object.assign(text("button", "m-btn", "END"), { type: "button", onclick: () => {
-    if (ending) { clearTimeout(ending); ending = null; end.textContent = "END"; return say("end"); }
-    end.textContent = "TAP AGAIN TO END";
-    ending = setTimeout(() => { ending = null; end.textContent = "END"; }, 3000);
-  } });
+  const twice = (b, label, armedLabel, act) => {
+    let armed = null;
+    b.onclick = () => {
+      if (armed) { clearTimeout(armed); armed = null; b.textContent = label(); return act(); }
+      b.textContent = armedLabel();
+      armed = setTimeout(() => { armed = null; b.textContent = label(); }, 3000);
+    };
+  };
+  const end = Object.assign(text("button", "m-btn", "END"), { type: "button" });
+  twice(end, () => "END", () => "TAP AGAIN TO END", () => say("end"));
   const tools = el("div", "m-row");
   for (const b of [black, full, end]) { b.style.flex = "1"; tools.append(b); }
   tools.style.marginTop = "10px";
-  const start = Object.assign(text("button", "m-btn primary", "SHOW THIS DECK ON THE DESK"), { type: "button", onclick: () => say("open " + deck.name) });
+  // shows the deck at once when the desk shows none; over another talk, on the second tap
+  const start = Object.assign(text("button", "m-btn primary", "SHOW THIS DECK ON THE DESK"), { type: "button" });
+  let replacing = null;
+  start.onclick = () => {
+    if (!now?.d || replacing) { clearTimeout(replacing); replacing = null; start.textContent = "SHOW THIS DECK ON THE DESK"; return say("open " + deck.name); }
+    start.textContent = `REPLACES ${now.d}, SLIDE ${now.i} / ${now.n} — TAP AGAIN`;
+    replacing = setTimeout(() => { replacing = null; start.textContent = "SHOW THIS DECK ON THE DESK"; }, 3000);
+  };
   const link = Object.assign(text("button", "m-btn", "CONNECT OVER BLUETOOTH"), { type: "button" });
+  const mode = Object.assign(text("button", "m-btn", "TRACKPAD"), { type: "button", onclick: () => { padMode = !padMode; draw(); } });
+  const others = Object.assign(text("button", "m-btn", "OTHER DECKS"), { type: "button", onclick: () => {
+    teardown?.(); teardown = null;
+    if (!back) inside(() => APPS.slides.open());
+    deckList();
+  } });
   const said = text("div", "m-muted", "");
-  for (const b of [start, link]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+  for (const b of [start, link, mode, others]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+  // the pad writes on the same queue as the words: a GATT write can't start while another is on its way
+  const write = t => (queue = queue.catch(() => {}).then(() => ble.steer.writeValueWithoutResponse(new TextEncoder().encode(t))));
+  const pad = trackpad(write, () => !!ble, e => { said.textContent = "Bluetooth: " + e.message; }, "38vh");
   const urls = deck.thumbs.map(b => URL.createObjectURL(b));
   const draw = () => {
-    const ours = now && now.d === deck.name;
+    const ours = now && now.d === deck.name, onPad = ours && padMode && !!ble;
     start.hidden = ours;
-    for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours;
+    for (const e of [pads, tools, nextLabel, pic]) e.hidden = !ours || onPad;
+    pad.box.hidden = !onPad;
+    mode.hidden = !ours || !ble;
+    mode.textContent = onPad ? "SLIDES" : "TRACKPAD";
     link.hidden = !navigator.bluetooth || !!ble;
     if (!now) { where.textContent = "not connected"; notes.textContent = ""; return; }
     if (!ours) { where.textContent = now.d ? "the desk shows " + now.d : "the desk shows no deck"; notes.textContent = ""; return; }
     where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : "") + (ble ? " · bluetooth" : " · wifi");
     notes.textContent = deck.notes[now.i - 1] || "(no notes for this slide)";
     nextLabel.textContent = now.i < now.n ? "NEXT · " + (now.i + 1) : "END OF THE DECK";
-    pic.hidden = now.i >= now.n;
+    pic.hidden = onPad || now.i >= now.n;
     if (now.i < now.n) pic.src = urls[now.i];
     black.textContent = now.b ? "UNBLACK" : "BLACK";
     full.textContent = now.f ? "WINDOW" : "FULL";
   };
-  const got = s => { now = s; draw(); };
-  // the words, one after the other: a GATT write can't start while another is on its way
+  const got = s => {
+    now = shown = s;
+    if (s.d && talk?.deck !== s.d) talk = { deck: s.d, at: Date.now() };
+    if (!s.d) talk = null;
+    draw();
+  };
   const say = words => {
-    queue = queue.then(async () => {
+    (queue = queue.catch(() => {}).then(async () => {
       if (ble) await ble.steer.writeValueWithoutResponse(new TextEncoder().encode("p " + words));
       else { const s = await desk("/api/slides", { do: words }); got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full }); }
-    }).catch(e => { said.textContent = e.away ? "The desk is out of reach. Connect over Bluetooth." : (e.message || String(e)); });
+    })).catch(e => { said.textContent = e.away ? "The desk is out of reach. Connect over Bluetooth." : (e.message || String(e)); });
   };
   const read = v => JSON.parse(new TextDecoder().decode(v));
   // Bluetooth: the desk picked for the Remote, or picked here; the slide read once, then each change told
@@ -634,18 +671,35 @@ function present(deck) {
       try {
         const s = await desk("/api/slides/now?after=" + seq, null, 30000);
         seq = s.seq;
-        if (!ble) got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full });
+        if (!ble && !gone) got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full });
       } catch { if (!gone) await new Promise(r => setTimeout(r, 3000)); }
     }
   })();
-  const timer = setInterval(() => { const t = Math.floor((Date.now() - started) / 1000); clock.textContent = Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); }, 1000);
+  const tick = () => { if (!talk || talk.deck !== deck.name) return void (clock.textContent = ""); const t = Math.floor((Date.now() - talk.at) / 1000); clock.textContent = Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
+  const timer = setInterval(tick, 1000);
   teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
   title.textContent = deck.name;
   const form = el("div", "m-pad");
-  form.append(top, notes, nextLabel, pic, pads, tools, start, link, said);
+  form.append(top, notes, nextLabel, pic, pads, pad.box, tools, mode, start, link, others, said);
   body.replaceChildren(form);
+  if (shown) now = shown; // what this phone last heard, until the desk says again
   draw();
+  tick();
   rejoin();
+}
+
+// the decks kept on this phone; the one the desk shows is marked, a tap opens a deck's remote
+async function deckList() {
+  title.textContent = "Slides";
+  const decks = (await all("decks")).sort((a, b) => a.name.localeCompare(b.name));
+  if (open !== "slides") return;
+  const list = el("div", "m-list");
+  for (const d of decks) {
+    const r = row(I.slides, d.name, shown?.d === d.name ? `on the desk · ${shown.i} / ${shown.n}` : d.count + " slides");
+    r.onclick = () => present(d); // back, from there: to the remote of the talk on show (or out, with none)
+    list.append(r);
+  }
+  body.replaceChildren(decks.length ? list : note("No deck on this phone yet. Put a folder with its PDF in the desk's ~/Slides, then sync while the desk is in reach."));
 }
 
 function confirmRemove(r, w) {
