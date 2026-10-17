@@ -1,6 +1,7 @@
 // The desk's companion on the phone. The look is symbios's mobile shell (status bar, springboard,
-// panes sliding in; css/mobile.css unchanged); the code is its own and small. Five apps: Reader (articles kept on this
-// phone, readable with no network), Shared (links shared to it, waiting for the desk), Monitor
+// panes sliding in; css/mobile.css unchanged); the code is its own and small. Seven apps: Reader (articles kept on this
+// phone, readable with no network), Shared (links shared to it, waiting for the desk), Memos (voice notes
+// recorded here; the ones kept go to the desk's inbox, which writes their text), Monitor
 // (how the desk is doing), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
@@ -24,18 +25,20 @@ const I = {
   book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3z"/><path d="M18 4h1v13"/></svg>',
   trackpad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8M12 8l-2 2M12 8l2 2"/></svg>',
   slides: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M12 16v4M8 20h8M10 8l4 2-4 2z"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.7 2.7 2.7 15.3 0 18M12 3c-2.7 2.7-2.7 15.3 0 18"/></svg>',
 };
 
-// ---- what the phone keeps: articles, waiting links, decks (previews and notes), and a few settings (IndexedDB) ----
+// ---- what the phone keeps: articles, waiting links, decks (previews and notes), voice memos, and a few settings (IndexedDB) ----
 const db = new Promise((ok, no) => {
-  const r = indexedDB.open("desk", 2);
+  const r = indexedDB.open("desk", 3);
   r.onupgradeneeded = () => {
     const have = r.result.objectStoreNames, make = (name, how) => have.contains(name) || r.result.createObjectStore(name, how);
     make("articles", { keyPath: "file" });
     make("waiting", { keyPath: "url" });
     make("settings");
     make("decks", { keyPath: "name" });
+    make("memos", { keyPath: "at" }); // { at: when it began (ms), seconds, blob, keep: for the desk, why: refused by it }
   };
   r.onsuccess = () => ok(r.result);
   r.onerror = () => no(r.error);
@@ -50,12 +53,15 @@ const drop = (name, key) => store(name, "readwrite", s => s.delete(key));
 const setting = key => store("settings", "readonly", s => s.get(key));
 
 // ---- the desk, over the local network (plain http: it has no name the world knows) ----
+// body: JSON, or a Blob sent as it is (a file for the inbox)
 async function desk(path, body, ms, blob) {
   const at = await setting("desk");
   if (!at) throw Object.assign(new Error("no desk address yet"), { away: true });
   const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms || (body ? 45000 : 8000));
+  const post = body instanceof Blob ? { method: "POST", headers: { "Content-Type": body.type || "application/octet-stream" }, body }
+    : body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
   try {
-    const r = await fetch("http://" + at + path, { signal: stop.signal, ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}) });
+    const r = await fetch("http://" + at + path, { signal: stop.signal, ...post });
     if (blob && r.ok) return await r.blob(); // a picture, kept as it is
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(data.error || "the desk answered " + r.status), { refused: r.status === 422 });
@@ -143,6 +149,18 @@ async function sync(loud) {
         await put("waiting", { ...w, why: e.message }); // a paywall, a page with no article: it stays, with the reason
       }
     }
+    // the memos kept for the desk go to its inbox with the time they were recorded; once there, they leave the phone
+    let heard = 0;
+    for (const m of (await all("memos")).filter(m => m.keep)) {
+      try {
+        await desk("/api/inbox?name=" + encodeURIComponent(memoName(m)) + "&modified=" + m.at, m.blob, 180000);
+        await drop("memos", m.at);
+        heard++;
+      } catch (e) {
+        if (e.away) throw e;
+        await put("memos", { ...m, keep: false, why: e.message }); // too large, refused: it stays here, with the reason
+      }
+    }
     const have = new Set((await all("articles")).map(a => a.file));
     const fresh = (await desk("/api/articles")).articles.filter(a => !have.has(a.file));
     for (const card of fresh) {
@@ -151,7 +169,7 @@ async function sync(loud) {
     }
     const decks = await syncDecks();
     await put("settings", Date.now(), "synced");
-    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
+    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
       decks && decks + " deck" + (decks > 1 ? "s" : "")].filter(Boolean);
     if (bits.length || loud) toast(bits.length ? "Synced — " + bits.join(", ") : "Up to date", true);
   } catch (e) {
@@ -293,6 +311,87 @@ const APPS = {
       body.replaceChildren(...(links.length ? [list, ...(links.some(w => !w.why) ? [foot] : [])] : [note("No link is waiting. Share one to “desk” from any app.")]));
     },
     fresh() { APPS.share.open(); },
+  },
+  // voice memos: recorded here, listened to, then kept for the desk (its inbox writes the text) or deleted
+  memos: {
+    name: "Memos", glyph: I.mic, dock: false, needs: () => !!navigator.mediaDevices && "MediaRecorder" in window,
+    async open() {
+      back = null;
+      title.textContent = "Memos";
+      const memos = (await all("memos")).sort((a, b) => b.at - a.at);
+      if (open !== "memos" || back) return;
+      teardown = () => { if (rec) stopMemo().then(() => toast("Memo saved on the phone", true)); }; // leaving keeps what was said
+      const top = el("div", "m-pad"), big = Object.assign(el("button"), { type: "button" }), dot = el("span");
+      big.setAttribute("aria-label", "record");
+      big.style.cssText = "display:block;margin:10px auto;width:96px;height:96px;border-radius:50%;border:2px solid var(--accent);background:transparent;padding:0;cursor:pointer";
+      const look = on => { dot.style.cssText = "display:block;margin:auto;background:var(--accent);transition:all .15s;" + (on ? "width:30px;height:30px;border-radius:6px" : "width:64px;height:64px;border-radius:50%"); };
+      big.append(dot);
+      const said = text("div", "m-muted", "Tap to record"), meter = el("div"), level = el("i");
+      said.style.textAlign = "center";
+      meter.style.cssText = "height:4px;margin:10px 20%;background:var(--hair);border-radius:2px;overflow:hidden";
+      level.style.cssText = "display:block;height:100%;background:var(--accent);transform:scaleX(0);transform-origin:left";
+      meter.append(level);
+      top.append(big, said, meter);
+      look(false);
+      big.onclick = async () => {
+        if (rec) { await stopMemo(); return APPS.memos.open(); }
+        try {
+          await startMemo((seconds, loud) => { said.textContent = "● " + mmss(seconds) + " — tap to stop"; level.style.transform = "scaleX(" + loud + ")"; });
+          look(true);
+          list.style.opacity = 0.4;
+        } catch (e) {
+          said.textContent = e.name === "NotAllowedError" ? "The microphone was refused. Allow it in the site's settings." : "The microphone: " + e.message;
+        }
+      };
+      const list = el("div", "m-list");
+      for (const m of memos) {
+        const r = row(I.mic, new Date(m.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+          mmss(m.seconds) + " · " + (m.keep ? "for the desk" : m.why ? "not taken" : "on the phone"));
+        r.onclick = () => { if (!rec) APPS.memos.listen(m); };
+        list.append(r);
+      }
+      const parts = [top, ...(memos.length ? [list] : [])];
+      if (memos.some(m => m.keep)) {
+        const foot = el("div", "m-pad");
+        foot.append(Object.assign(text("button", "m-btn primary", "SEND THE KEPT ONES NOW"), { onclick: () => sync(true) }));
+        parts.push(foot);
+      }
+      parts.push(note(memos.length ? "Tap a memo to listen, then keep it for the desk or delete it. Kept ones go to the desk's inbox when it is in reach; it writes their text into ~/Memos. Once there, they leave this phone."
+        : "Nothing recorded yet. What you keep goes to the desk's inbox, which writes it out as text."));
+      body.replaceChildren(...parts);
+    },
+    fresh() { if (!back && !rec) APPS.memos.open(); }, // never under a recording
+    // one memo: listen, then keep it for the desk or delete it (on the second tap)
+    listen(m) {
+      inside(() => APPS.memos.open());
+      title.textContent = "Memo";
+      const url = URL.createObjectURL(m.blob), player = Object.assign(el("audio"), { src: url, controls: true, preload: "metadata" });
+      player.style.cssText = "display:block;width:100%;margin:14px 0";
+      teardown = () => URL.revokeObjectURL(url);
+      const when = text("div", "m-muted", new Date(m.at).toLocaleString() + " · " + mmss(m.seconds));
+      const keep = Object.assign(text("button", "m-btn" + (m.keep ? "" : " primary"), m.keep ? "DON'T SEND IT" : "KEEP — SEND TO THE DESK"), { type: "button" });
+      keep.onclick = async () => {
+        const kept = !m.keep;
+        await put("memos", { ...m, keep: kept, why: undefined });
+        badges();
+        if (kept) { toast("Kept for the desk", true); if (wasOnline) sync(false); }
+        history.back();
+      };
+      const del = Object.assign(text("button", "m-btn", "DELETE"), { type: "button" });
+      let armedDel = null;
+      del.onclick = async () => {
+        if (!armedDel) { del.textContent = "TAP AGAIN TO DELETE"; armedDel = setTimeout(() => { armedDel = null; del.textContent = "DELETE"; }, 3000); return; }
+        clearTimeout(armedDel);
+        await drop("memos", m.at);
+        badges();
+        history.back();
+      };
+      for (const b of [keep, del]) b.style.cssText = "display:block;width:100%;margin-top:10px";
+      const box = el("div", "m-pad");
+      box.append(when, player, keep, del);
+      if (m.why) box.append(note("The desk didn't take it: " + m.why + "."));
+      body.replaceChildren(box);
+    },
   },
   status: {
     name: "Monitor", glyph: I.status,
@@ -731,6 +830,52 @@ function slidesScreen(draw) {
   show();
 }
 
+// The memo being recorded, one at a time. The screen is kept on while it records: a phone that
+// sleeps may stop the microphone. show is told the seconds so far and how loud it is now (0 to 1).
+let rec = null;
+const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+async function startMemo(show) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const type = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(t => MediaRecorder.isTypeSupported(t));
+  const recorder = new MediaRecorder(stream, type ? { mimeType: type } : {}), chunks = [];
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const ctx = new AudioContext(), meter = ctx.createAnalyser(), samples = new Float32Array(1024);
+  meter.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(meter);
+  ctx.resume().catch(() => {}); // some browsers make it suspended, and the meter would stay still
+  const lock = await navigator.wakeLock?.request("screen").catch(() => null);
+  rec = { recorder, stream, chunks, ctx, lock, at: Date.now(), done: new Promise(ok => { recorder.onstop = ok; }) };
+  recorder.start(1000); // a piece each second
+  const it = rec, frame = () => {
+    if (rec !== it) return;
+    meter.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const s of samples) sum += s * s;
+    show((Date.now() - it.at) / 1000, Math.min(1, Math.sqrt(sum / samples.length) * 5));
+    requestAnimationFrame(frame);
+  };
+  frame();
+}
+// stops the recording and keeps it on the phone (not yet for the desk)
+async function stopMemo() {
+  const r = rec;
+  if (!r) return;
+  rec = null;
+  const seconds = (Date.now() - r.at) / 1000;
+  r.recorder.stop();
+  await r.done;
+  r.stream.getTracks().forEach(t => t.stop());
+  r.ctx.close();
+  r.lock?.release().catch(() => {});
+  if (r.chunks.length) await put("memos", { at: r.at, seconds, blob: new Blob(r.chunks, { type: r.recorder.mimeType || "audio/webm" }), keep: false });
+}
+// the file's name in the desk's inbox; the desk names the memo by its time and its first sentence
+function memoName(m) {
+  const d = new Date(m.at), p = n => String(n).padStart(2, "0");
+  return `memo ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
+    + (/mp4|aac/.test(m.blob.type) ? ".m4a" : /ogg/.test(m.blob.type) ? ".ogg" : ".webm");
+}
+
 function confirmRemove(r, w) {
   if (armed === w.url) { armed = null; return true; }
   armed = w.url;
@@ -742,7 +887,7 @@ function confirmRemove(r, w) {
 // ---- springboard + dock ----
 function tile(id) {
   const b = el("button", "app-tile"), glyph = el("span", "glyph", APPS[id].glyph);
-  if (id === "share") glyph.append(Object.assign(el("span", "tile-badge"), { hidden: true }));
+  if (id === "share" || id === "memos") { const n = Object.assign(el("span", "tile-badge"), { hidden: true }); n.dataset.app = id; glyph.append(n); }
   b.append(glyph, text("span", "label", APPS[id].name));
   b.onclick = () => openApp(id);
   return b;
@@ -752,8 +897,8 @@ for (const id of Object.keys(APPS).filter(id => !APPS[id].needs || APPS[id].need
   if (APPS[id].dock !== false) document.getElementById("dock-tiles").append(tile(id));
 }
 async function badges() {
-  const n = (await all("waiting")).length;
-  for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n; b.textContent = n; }
+  const n = { share: (await all("waiting")).length, memos: (await all("memos")).filter(m => m.keep).length }; // links waiting, memos kept for the desk
+  for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n[b.dataset.app]; b.textContent = n[b.dataset.app]; }
 }
 
 // ---- status bar: the clock, and whether the desk is in reach (a tap asks again and syncs) ----

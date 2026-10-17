@@ -2,7 +2,7 @@
   "id": "desk-companion-2",
   "name": "desk",
   "short_name": "desk",
-  "description": "The desk's companion on the phone: share a link to it, read what the desk kept.",
+  "description": "The desk's companion on the phone: share a link to it, record a memo for it, read what the desk kept.",
   "start_url": "./?from=home",
   "scope": "./",
   "display": "standalone",
