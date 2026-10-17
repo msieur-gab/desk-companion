@@ -837,7 +837,9 @@ const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart
 async function startMemo(show) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const type = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find(t => MediaRecorder.isTypeSupported(t));
-  const recorder = new MediaRecorder(stream, type ? { mimeType: type } : {}), chunks = [];
+  // 24 kbps, about 180 KB a minute: Opus at 16–32 kbps transcribes as well as the browser's ~129 kbps (Gab's
+  // test on the board, 2026-10-17), for a quarter of the upload and of the writes to the SD card
+  const recorder = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: 24000 }), chunks = [];
   recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   const ctx = new AudioContext(), meter = ctx.createAnalyser(), samples = new Float32Array(1024);
   meter.fftSize = 1024;
