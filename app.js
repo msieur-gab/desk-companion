@@ -365,9 +365,31 @@ const APPS = {
     listen(m) {
       inside(() => APPS.memos.open());
       title.textContent = "Memo";
-      const url = URL.createObjectURL(m.blob), player = Object.assign(el("audio"), { src: url, controls: true, preload: "metadata" });
-      player.style.cssText = "display:block;width:100%;margin:14px 0";
-      teardown = () => URL.revokeObjectURL(url);
+      // the player in the shell's look (symbios mobile's now-playing bar). The length is the one measured while
+      // recording: a browser's recording often doesn't say its own
+      const url = URL.createObjectURL(m.blob), audio = new Audio(url);
+      teardown = () => { audio.pause(); URL.revokeObjectURL(url); };
+      const player = el("div", "m-nowmeta"), hit = el("div"), seek = el("div", "m-seek"), fill = el("i"), ctrls = el("div", "m-nowctrls");
+      player.style.margin = "14px 0";
+      hit.style.cssText = "padding:14px 0;cursor:pointer;touch-action:none"; // a 4px bar, with room for a thumb
+      seek.append(fill);
+      hit.append(seek);
+      const pb = (label, act) => { const b = Object.assign(text("button", "m-pbtn", label), { type: "button", onclick: act }); b.style.cssText = "font-size:18px;padding:8px 12px"; return b; };
+      const skip = s => { audio.currentTime = Math.max(0, Math.min(m.seconds, audio.currentTime + s)); };
+      const play = pb(">", () => audio.paused ? audio.play() : audio.pause()), time = text("span", "m-time m-muted", "");
+      ctrls.append(pb("<<", () => skip(-10)), play, pb(">>", () => skip(10)), time);
+      player.append(hit, ctrls);
+      const draw = () => {
+        const t = Math.min(audio.currentTime, m.seconds);
+        fill.style.transform = "scaleX(" + (m.seconds ? t / m.seconds : 0) + ")";
+        time.textContent = mmss(t) + " / " + mmss(m.seconds);
+        play.textContent = audio.paused ? ">" : "||";
+      };
+      for (const e of ["timeupdate", "play", "pause", "ended", "seeked"]) audio.addEventListener(e, draw);
+      const to = e => { const r = seek.getBoundingClientRect(); audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * m.seconds; draw(); };
+      hit.onpointerdown = e => { hit.setPointerCapture(e.pointerId); to(e); hit.onpointermove = to; };
+      hit.onpointerup = hit.onpointercancel = () => { hit.onpointermove = null; };
+      draw();
       const when = text("div", "m-muted", new Date(m.at).toLocaleString() + " · " + mmss(m.seconds));
       const keep = Object.assign(text("button", "m-btn" + (m.keep ? "" : " primary"), m.keep ? "DON'T SEND IT" : "KEEP — SEND TO THE DESK"), { type: "button" });
       keep.onclick = async () => {
