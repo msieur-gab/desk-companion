@@ -153,7 +153,7 @@ async function sync(loud) {
     let heard = 0;
     for (const m of (await all("memos")).filter(m => m.keep)) {
       try {
-        await desk("/api/inbox?name=" + encodeURIComponent(memoName(m)) + "&modified=" + m.at, m.blob, 180000);
+        await desk("/api/inbox?name=" + encodeURIComponent(memoName(m)) + "&modified=" + m.at + "&source=recorder", m.blob, 180000);
         await drop("memos", m.at);
         heard++;
       } catch (e) {
