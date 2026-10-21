@@ -298,6 +298,16 @@ canvas.avatar{display:block}
 .mon-meta .m-kv{border-bottom:1px solid var(--hair)}
 .mon-meta .m-kv:last-child{border-bottom:0}
 .mon-off{padding:18px;text-align:center}
+.mon-act{margin-top:12px}
+.mon-act h4{margin:0 0 6px;font-size:11px;font-weight:400;letter-spacing:1px;color:var(--muted)}
+.mon-tasks{font-size:13px}
+.mon-tasks:empty::before{content:attr(data-empty);color:var(--muted)}
+.mon-task{display:grid;grid-template-columns:minmax(0,1fr) 28% 7ch;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--hair)}
+.mon-task:first-child{border-top:0}
+.mon-task .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mon-task .mon-bar{margin-top:0}
+.mon-task .tm{text-align:right;font-variant-numeric:tabular-nums}
+.mon-task.pending .mon-bar{visibility:hidden}
 
 /* ── profile app ─────────────────────────────────────────────── */
 .prof{display:flex;flex-direction:column;align-items:center;gap:12px;padding:24px 16px;text-align:center}

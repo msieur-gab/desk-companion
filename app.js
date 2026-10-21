@@ -133,9 +133,9 @@ async function joinBluetooth(ssid, password, step) {
 }
 
 // hand the waiting links over, then bring back the articles this phone doesn't have yet
-let syncing = false;
-async function sync(loud) {
-  if (syncing) return;
+let syncing = false, again = false;
+async function sync(loud, quiet) {
+  if (syncing) { again = true; return; } // asked during a sync: once more after it, for what came meanwhile
   syncing = true;
   try {
     let sent = 0;
@@ -171,13 +171,33 @@ async function sync(loud) {
     await put("settings", Date.now(), "synced");
     const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
       decks && decks + " deck" + (decks > 1 ? "s" : "")].filter(Boolean);
-    if (bits.length || loud) toast(bits.length ? "Synced — " + bits.join(", ") : "Up to date", true);
+    if ((bits.length && !quiet) || loud) toast(bits.length ? "Synced — " + bits.join(", ") : "Up to date", true);
   } catch (e) {
     if (loud) toast(e.away ? "The desk is out of reach" : "Couldn't sync (" + e.message + ")", false);
   } finally {
     syncing = false;
     badges();
     if (open && APPS[open].fresh) APPS[open].fresh();
+    if (again) { again = false; sync(false, true); }
+  }
+}
+
+// ---- what happens on the desk (its /api/changes, signals.py): while this app is open and the desk in reach
+// over the WiFi, a new article or deck there brings a quiet sync (only what is new comes); the desk's heavy
+// work feeds Monitor's Activity. Nothing over Bluetooth: it can't bring files to the phone anyway ----
+let deskTasks = [], deskSkew = 0;
+async function follow() { // started at the end, once wasOnline exists
+  let seq = -1, boot = 0;
+  for (;;) {
+    if (document.hidden || !wasOnline) { await new Promise(r => setTimeout(r, 3000)); continue; }
+    try {
+      const d = await desk(`/api/changes?after=${seq}&boot=${boot}`, null, 30000);
+      deskSkew = Date.now() / 1000 - d.now;
+      deskTasks = d.tasks;
+      APPS.status.activity?.();
+      if (seq !== -1 && (d.missed || d.changes.some(c => /^(Articles|Slides)(\/|$)/.test(c.folder)))) sync(false, true);
+      seq = d.seq; boot = d.boot;
+    } catch { await new Promise(r => setTimeout(r, 3000)); }
   }
 }
 
@@ -423,6 +443,7 @@ const APPS = {
       const gauge = (id, label, spark) => `<div class="mon-gauge"><h4>${label}</h4><div class="mon-big" id="g-${id}">—</div><div class="mon-bar"><i id="g-${id}-b"></i></div>${spark ? `<div class="mon-spark" id="g-${id}-s"></div>` : `<small id="g-${id}-sub"></small>`}</div>`;
       body.innerHTML = `<div class="mon"><div class="mon-grid">${gauge("cpu", "CPU LOAD", true)}${gauge("mem", "MEMORY")}${gauge("temp", "SOC TEMP")}${gauge("disk", "DISK")}</div>
         <div class="mon-meta"><div class="m-kv"><span class="m-muted">name</span><b id="g-host">—</b></div><div class="m-kv"><span class="m-muted">uptime</span><b id="g-up">—</b></div></div>
+        <div class="mon-act"><h4>ACTIVITY</h4><div class="mon-tasks"></div></div>
         <div class="mon-off m-muted" hidden>desk not reachable</div></div>`;
       const $ = id => document.getElementById(id), gb = n => (n / 1073741824).toFixed(1), spark = $("g-cpu-s");
       for (let i = 0; i < 30; i++) spark.append(el("i"));
@@ -442,9 +463,35 @@ const APPS = {
         const h = Math.floor(s.uptime / 3600);
         $("g-host").textContent = s.host; $("g-up").textContent = (h >= 24 ? Math.floor(h / 24) + "d " : "") + (h % 24) + "h " + Math.floor(s.uptime % 3600 / 60) + "m";
       };
+      // Activity: the desk's heavy work, as on the desk's own System window: a plain bar and the time left,
+      // "pending" while it waits its turn, "done" for a moment, then gone
+      const tasksEl = body.querySelector(".mon-tasks"), rows = new Map();
+      const left = s => s >= 90 ? Math.round(s / 60) + " min" : Math.max(1, Math.round(s)) + " s";
+      let soon = null;
+      this.activity = () => {
+        clearTimeout(soon);
+        const now = Date.now() / 1000 - deskSkew, seen = new Set();
+        for (const t of deskTasks) {
+          if (t.ended && now - t.ended > 3) continue;
+          seen.add(t.id);
+          let r = rows.get(t.id);
+          if (!r) { r = el("div", "mon-task"); r.innerHTML = `<span class="nm"></span><div class="mon-bar"><i></i></div><span class="tm m-muted"></span>`; rows.set(t.id, r); tasksEl.append(r); }
+          const run = t.state === "running", gone = run && t.expect ? now - t.since : 0;
+          const pct = t.ended ? 100 : run && t.expect ? Math.min(99, gone / t.expect * 100) : 0;
+          r.classList.toggle("pending", t.state === "pending");
+          r.querySelector(".nm").textContent = t.name;
+          r.querySelector("i").style.transform = "scaleX(" + pct / 100 + ")";
+          r.querySelector(".tm").textContent = t.state === "done" ? "done" : t.state === "failed" ? "failed" : !run ? "pending"
+            : !t.expect ? "running" : t.expect - gone > 1 ? left(t.expect - gone) : "almost";
+        }
+        for (const [id, r] of rows) if (!seen.has(id)) { r.remove(); rows.delete(id); }
+        tasksEl.dataset.empty = rows.size ? "" : "Nothing running.";
+        if (rows.size) soon = setTimeout(this.activity, 1000);
+      };
+      this.activity();
       tick();
       const timer = setInterval(tick, 4000);
-      teardown = () => clearInterval(timer);
+      teardown = () => { clearInterval(timer); clearTimeout(soon); this.activity = null; };
     },
   },
   // the phone as the desk's trackpad, over Bluetooth: only where the browser has Bluetooth
@@ -946,6 +993,7 @@ async function ping() {
 }
 conn.onclick = async () => { await ping(); if (wasOnline) sync(true); else toast("The desk is out of reach", false); };
 setInterval(() => { if (!document.hidden) ping(); }, 15000);
+follow();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
 
 // ---- start: a link shared from another app arrives in the address; it joins the waiting ones ----
