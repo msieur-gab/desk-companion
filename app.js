@@ -688,8 +688,8 @@ function present(deck, slot) {
   const top = el("div", "m-row"), where = text("div", "m-muted", ""), clock = text("div", "m-muted", "");
   where.style.flex = "1";
   top.append(where, clock);
-  const notes = text("div", "", "");
-  notes.style.cssText = "font-size:22px;line-height:1.35;margin:14px 0;min-height:22vh;white-space:pre-wrap";
+  const notes = text("div", "m-notes", ""); // long notes scroll in their own place; the slides and buttons stay on screen
+  notes.style.cssText = "font-size:22px;line-height:1.35;margin:14px 0;white-space:pre-wrap";
   // the slide on show and the next one, side by side: facing the room, the phone says what the room sees and what comes
   const shot = () => {
     const box = el("div"), label = text("div", "m-muted", ""), img = el("img");
@@ -757,6 +757,7 @@ function present(deck, slot) {
     }
     where.textContent = `${now.i} / ${now.n}` + (now.b ? " · BLACK" : "") + (ble ? " · bluetooth" : " · wifi");
     notes.textContent = deck.notes[now.i - 1] || "(no notes for this slide)";
+    notes.scrollTop = 0;
     cur.label.textContent = "NOW · " + now.i + (now.b ? " · BLACK" : "");
     picture(cur, now.i - 1);
     cur.img.style.opacity = now.b ? 0.3 : 1; // blacked: dimmed here, black on the screen
@@ -810,6 +811,7 @@ function present(deck, slot) {
   const timer = setInterval(tick, 1000);
   teardown = () => { gone = true; clearInterval(timer); document.removeEventListener("visibilitychange", rejoin); urls.forEach(u => URL.revokeObjectURL(u)); };
   title.textContent = deck.name;
+  slot.classList.add("presenting");
   slot.replaceChildren(top, notes, shots, pads, tools, start, link, others, said);
   if (shown) now = shown; // what this phone last heard, until the desk says again
   draw();
@@ -839,16 +841,18 @@ function slidesScreen(draw) {
   const tabs = el("div", "m-row"), toPad = text("button", "m-btn", "TRACKPAD"), toSlides = text("button", "m-btn", "SLIDES");
   for (const b of [toSlides, toPad]) { b.type = "button"; b.style.flex = "1"; tabs.append(b); }
   tabs.style.cssText = "padding:12px 12px 0";
-  const slot = el("div", "m-pad");
+  const slot = el("div", "m-pad"), screen = el("div", "m-talk");
   const show = () => {
     teardown?.(); teardown = null; // the screen before: its link loop, its timers
+    slot.classList.remove("presenting");
     toPad.classList.toggle("primary", slidesTab === "pad");
     toSlides.classList.toggle("primary", slidesTab === "slides");
     if (slidesTab === "pad") steerDesk(slot); else draw(slot);
   };
   toPad.onclick = () => { slidesTab = "pad"; show(); };
   toSlides.onclick = () => { slidesTab = "slides"; show(); };
-  body.replaceChildren(tabs, slot);
+  screen.append(tabs, slot);
+  body.replaceChildren(screen);
   show();
 }
 
