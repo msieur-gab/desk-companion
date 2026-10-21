@@ -1,6 +1,6 @@
 // The desk's companion on the phone. The look is symbios's mobile shell (status bar, springboard,
 // panes sliding in; css/mobile.css unchanged); the code is its own and small. Seven apps: Reader (articles kept on this
-// phone, readable with no network), Shared (links shared to it, waiting for the desk), Memos (voice notes
+// phone, readable with no network), Shared (links and files shared to it, waiting for the desk), Memos (voice notes
 // recorded here; the ones kept go to the desk's inbox, which writes their text), Monitor
 // (how the desk is doing), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
@@ -26,31 +26,11 @@ const I = {
   trackpad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8M12 8l-2 2M12 8l2 2"/></svg>',
   slides: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M12 16v4M8 20h8M10 8l4 2-4 2z"/></svg>',
   mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 15h6M9 18h4"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.7 2.7 2.7 15.3 0 18M12 3c-2.7 2.7-2.7 15.3 0 18"/></svg>',
 };
 
-// ---- what the phone keeps: articles, waiting links, decks (previews and notes), voice memos, and a few settings (IndexedDB) ----
-const db = new Promise((ok, no) => {
-  const r = indexedDB.open("desk", 3);
-  r.onupgradeneeded = () => {
-    const have = r.result.objectStoreNames, make = (name, how) => have.contains(name) || r.result.createObjectStore(name, how);
-    make("articles", { keyPath: "file" });
-    make("waiting", { keyPath: "url" });
-    make("settings");
-    make("decks", { keyPath: "name" });
-    make("memos", { keyPath: "at" }); // { at: when it began (ms), seconds, blob, keep: for the desk, why: refused by it }
-  };
-  r.onsuccess = () => ok(r.result);
-  r.onerror = () => no(r.error);
-});
-const store = async (name, mode, work) => {
-  const t = (await db).transaction(name, mode), asked = work(t.objectStore(name));
-  return new Promise((ok, no) => { t.oncomplete = () => ok(asked?.result); t.onerror = () => no(t.error); });
-};
-const all = name => store(name, "readonly", s => s.getAll());
-const put = (name, value, key) => store(name, "readwrite", s => s.put(value, key));
-const drop = (name, key) => store(name, "readwrite", s => s.delete(key));
-const setting = key => store("settings", "readonly", s => s.get(key));
+// what the phone keeps (IndexedDB: db, store, all, put, drop, setting) is in db.js, shared with the service worker
 
 // ---- the desk, over the local network (plain http: it has no name the world knows) ----
 // body: JSON, or a Blob sent as it is (a file for the inbox)
@@ -161,6 +141,21 @@ async function sync(loud, quiet) {
         await put("memos", { ...m, keep: false, why: e.message }); // too large, refused: it stays here, with the reason
       }
     }
+    // files shared from other apps go to the desk's inbox, which decides where they go (a deck with its notes
+    // pages → Slides, any other PDF → Documents…, ~/Inbox/rules.md); once there, they leave the phone
+    let handed = 0, making = 0, there = 0;
+    for (const f of (await all("files")).filter(f => !f.why)) {
+      try {
+        const r = await desk("/api/inbox?name=" + encodeURIComponent(f.name) + "&modified=" + f.modified + "&source=share",
+          f.blob, 60000 + Math.ceil(f.size / 1e6) * 10000); // a big deck over a slow WiFi takes its time
+        await drop("files", f.id);
+        if (r.duplicate) there++; else handed++;
+        if (!r.duplicate && /^Slides\//.test(r.went || "")) making++;
+      } catch (e) {
+        if (e.away) throw e;
+        await put("files", { ...f, why: e.message }); // too large, refused: it stays here, with the reason
+      }
+    }
     const have = new Set((await all("articles")).map(a => a.file));
     const fresh = (await desk("/api/articles")).articles.filter(a => !have.has(a.file));
     for (const card of fresh) {
@@ -169,7 +164,9 @@ async function sync(loud, quiet) {
     }
     const decks = await syncDecks();
     await put("settings", Date.now(), "synced");
-    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
+    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent",
+      handed && handed + " file" + (handed > 1 ? "s" : "") + " handed over" + (making ? " (" + (making > 1 ? making + " decks" : "a deck") + " being made)" : ""),
+      there && there + " file" + (there > 1 ? "s were" : " was") + " already on the desk", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
       decks && decks + " deck" + (decks > 1 ? "s" : "")].filter(Boolean);
     if ((bits.length && !quiet) || loud) toast(bits.length ? "Synced — " + bits.join(", ") : "Up to date", true);
   } catch (e) {
@@ -318,19 +315,27 @@ const APPS = {
   share: {
     name: "Shared", glyph: I.share,
     async open() {
-      const links = (await all("waiting")).sort((a, b) => b.at - a.at);
+      const links = (await all("waiting")).sort((a, b) => b.at - a.at), files = (await all("files")).sort((a, b) => b.at - a.at);
       if (open !== "share") return;
       const list = el("div", "m-list");
+      for (const f of files) {
+        const r = row(I.file, f.name, f.why ? "not sent" : size(f.size) + " · waiting");
+        r.onclick = async () => { if (confirmRemove(r, f.id)) { await drop("files", f.id); badges(); APPS.share.open(); } };
+        list.append(r);
+        if (f.why) list.append(note(f.why + ". Tap the file twice to remove it."));
+      }
       for (const w of links) {
         const r = row(I.globe, w.title || w.url, w.why ? "not kept" : "waiting");
-        r.onclick = async () => { if (confirmRemove(r, w)) { await drop("waiting", w.url); badges(); APPS.share.open(); } };
+        r.onclick = async () => { if (confirmRemove(r, w.url)) { await drop("waiting", w.url); badges(); APPS.share.open(); } };
         list.append(r);
         if (w.why) list.append(note(w.why + ". Tap the link twice to remove it."));
       }
       const go = Object.assign(text("button", "m-btn primary", "HAND OVER TO THE DESK"), { onclick: () => sync(true) });
       const foot = el("div", "m-pad");
       foot.append(go);
-      body.replaceChildren(...(links.length ? [list, ...(links.some(w => !w.why) ? [foot] : [])] : [note("No link is waiting. Share one to “desk” from any app.")]));
+      const waiting = [...links, ...files];
+      body.replaceChildren(...(waiting.length ? [list, ...(waiting.some(w => !w.why) ? [foot] : [])]
+        : [note("Nothing is waiting. Share a link or a file to “desk” from any app: a link comes back as an article, a file goes to the desk's inbox (a deck exported with its notes pages becomes a deck in Slides).")]));
     },
     fresh() { APPS.share.open(); },
   },
@@ -947,17 +952,18 @@ async function stopMemo() {
   if (r.chunks.length) await put("memos", { at: r.at, seconds, blob: new Blob(r.chunks, { type: r.recorder.mimeType || "audio/webm" }), keep: false });
 }
 // the file's name in the desk's inbox; the desk names the memo by its time and its first sentence
+const size = n => n < 1e6 ? Math.max(1, Math.round(n / 1e3)) + " KB" : (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + " MB";
 function memoName(m) {
   const d = new Date(m.at), p = n => String(n).padStart(2, "0");
   return `memo ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
     + (/mp4|aac/.test(m.blob.type) ? ".m4a" : /ogg/.test(m.blob.type) ? ".ogg" : ".webm");
 }
 
-function confirmRemove(r, w) {
-  if (armed === w.url) { armed = null; return true; }
-  armed = w.url;
+function confirmRemove(r, key) {
+  if (armed === key) { armed = null; return true; }
+  armed = key;
   r.querySelector(".sub").textContent = "tap again to remove";
-  setTimeout(() => { if (armed === w.url) armed = null; }, 3000);
+  setTimeout(() => { if (armed === key) armed = null; }, 3000);
   return false;
 }
 
@@ -974,7 +980,7 @@ for (const id of Object.keys(APPS).filter(id => !APPS[id].needs || APPS[id].need
   if (APPS[id].dock !== false) document.getElementById("dock-tiles").append(tile(id));
 }
 async function badges() {
-  const n = { share: (await all("waiting")).length, memos: (await all("memos")).filter(m => m.keep).length }; // links waiting, memos kept for the desk
+  const n = { share: (await all("waiting")).length + (await all("files")).length, memos: (await all("memos")).filter(m => m.keep).length }; // links and files waiting, memos kept for the desk
   for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n[b.dataset.app]; b.textContent = n[b.dataset.app]; }
 }
 
@@ -996,12 +1002,19 @@ setInterval(() => { if (!document.hidden) ping(); }, 15000);
 follow();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) ping(); });
 
-// ---- start: a link shared from another app arrives in the address; it joins the waiting ones ----
+// ---- start: what was shared from another app. The service worker kept it (files, a link) and opens the page
+// with ?shared=&links=; an older install still sends a link in the address (?url=, the GET share target) ----
 (async () => {
   if (history.state?.pane) history.replaceState(null, ""); // a reload opens on the home screen
   navigator.serviceWorker?.register("sw.js").catch(() => {});
   navigator.storage?.persist?.(); // ask the phone not to clean the articles away
   const got = new URLSearchParams(location.search);
+  if (got.has("shared")) {
+    const files = +got.get("shared") || 0, links = +got.get("links") || 0;
+    history.replaceState(null, "", location.pathname);
+    toast(files || links ? "Kept for the desk" + (files > 1 ? " — " + files + " files" : "") : "Nothing could be kept", !!(files || links));
+    openApp("share"); // the desk in reach: ping() below hands it over
+  }
   const link = /https?:\/\/\S+/.exec([got.get("url"), got.get("text")].filter(Boolean).join(" "));
   if (link) {
     await put("waiting", { url: link[0], title: (got.get("title") || "").trim(), at: Date.now() });

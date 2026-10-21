@@ -2,7 +2,7 @@
   "id": "desk-companion-2",
   "name": "desk",
   "short_name": "desk",
-  "description": "The desk's companion on the phone: share a link to it, record a memo for it, read what the desk kept.",
+  "description": "The desk's companion on the phone: share a link or a file to it, record a memo for it, read what the desk kept.",
   "start_url": "./?from=home",
   "scope": "./",
   "display": "standalone",
@@ -29,12 +29,29 @@
     }
   ],
   "share_target": {
-    "action": "./",
-    "method": "GET",
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
     "params": {
       "title": "title",
       "text": "text",
-      "url": "url"
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "application/pdf",
+            ".pdf",
+            "image/*",
+            "audio/*",
+            "video/*",
+            "text/plain",
+            "text/markdown",
+            ".md",
+            ".txt"
+          ]
+        }
+      ]
     }
   },
   "orientation": "portrait"
