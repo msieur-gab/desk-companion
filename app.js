@@ -187,11 +187,13 @@ async function sync(loud) {
 // decks came in or changed pictures.
 async function syncDecks() {
   let names;
-  try { names = (await desk("/api/slides")).decks; } catch (e) { if (e.away) throw e; return 0; } // a desk without slides yet
+  let preparing = [];
+  try { ({ decks: names, preparing = [] } = await desk("/api/slides")); } catch (e) { if (e.away) throw e; return 0; } // a desk without slides yet
   const kept = new Map((await all("decks")).map(d => [d.name, d]));
   let changed = 0;
   for (const name of names) {
-    const d = await desk("/api/slides/deck?name=" + encodeURIComponent(name), null, 120000); // the first time, the desk makes them
+    if (preparing.includes(name)) continue; // its slides are being made on the desk: kept as it was, taken at a later sync
+    const d = await desk("/api/slides/deck?name=" + encodeURIComponent(name), null, 30000);
     const old = kept.get(name);
     let thumbs = old && old.made === d.made && old.thumbs.length === d.count ? old.thumbs : null;
     if (!thumbs) {
