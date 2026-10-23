@@ -27,6 +27,7 @@ const I = {
   slides: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M12 16v4M8 20h8M10 8l4 2-4 2z"/></svg>',
   mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>',
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 15h6M9 18h4"/></svg>',
+  talk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9l2 1.5L8 12M12 12h3"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.7 2.7 2.7 15.3 0 18M12 3c-2.7 2.7-2.7 15.3 0 18"/></svg>',
 };
 
@@ -228,6 +229,11 @@ async function syncDecks() {
 let offer = null;
 addEventListener("beforeinstallprompt", e => { e.preventDefault(); offer = e; });
 addEventListener("appinstalled", () => { offer = null; toast("Installed on this phone", true); });
+
+// ---- the Assistant's conversation: kept while the companion is open, as on the desk; reading shortcuts only ----
+const talkLog = [];
+const talkSession = (() => { try { return crypto.randomUUID(); } catch { return "p" + Math.random().toString(36).slice(2); } })();
+const TALK_SHORTCUTS = ["how hot is the board", "how much space is left", "how much memory is left", "is the wifi working", "what's running", "show my files"];
 
 // ---- the pane: one app at a time, sliding in from the right ----
 const pane = document.getElementById("pane"), scrim = document.getElementById("pane-scrim"), body = document.getElementById("pane-body"), title = document.getElementById("pane-title");
@@ -497,6 +503,63 @@ const APPS = {
       tick();
       const timer = setInterval(tick, 4000);
       teardown = () => { clearInterval(timer); clearTimeout(soon); this.activity = null; };
+    },
+  },
+  // the desk's Assistant from the phone (Gab, 2026-10-23): TermNL on the board, over the WiFi, as the desk's own
+  // window has it. What happens on the desk's screen (music, a file to open, the sound) isn't relayed yet
+  assistant: {
+    name: "Assistant", glyph: I.talk, dock: false,
+    open() {
+      const screen = el("div", "m-talk"), log = Object.assign(el("div", "m-pad talk-log"), { ariaLive: "polite" });
+      const chips = el("div", "m-row talk-chips"), form = el("form", "m-row talk-form");
+      const input = Object.assign(el("input", "m-input"), { placeholder: "Say something: how hot is the board", autocomplete: "off", ariaLabel: "Say something" });
+      form.append(input, text("button", "m-btn", "Send"));
+      for (const s of TALK_SHORTCUTS) { const b = text("button", "m-btn", s); b.type = "button"; b.onclick = () => this.say(s); chips.append(b); }
+      log.append(...talkLog);
+      screen.append(log, chips, form);
+      body.replaceChildren(screen);
+      form.onsubmit = e => { e.preventDefault(); const v = input.value.trim(); input.value = ""; if (v) this.say(v); };
+      this.log = log;
+      log.scrollTop = log.scrollHeight;
+    },
+    add(...nodes) {
+      talkLog.push(...nodes);
+      if (open !== "assistant") return;
+      this.log.append(...nodes);
+      this.log.scrollTop = this.log.scrollHeight;
+    },
+    async say(said) {
+      for (const b of talkLog.flatMap(n => [...n.querySelectorAll("button.chip")])) b.disabled = true; // that question is over
+      this.add(text("div", "talk-me", said));
+      let r;
+      try { r = await desk("/api/say", { text: said, session: talkSession }, 20000); }
+      catch (e) { return this.add(text("div", "talk-it", e.away ? "The desk is out of reach: the Assistant answers over the desk's WiFi." : "The desk couldn't answer: " + e.message + ".")); }
+      const it = text("div", "talk-it", r.say);
+      if (r.screen) it.append(text("div", "m-muted talk-note", "That happens on the desk's own screen; from the phone it doesn't reach it yet."));
+      if (r.table) {
+        const tb = el("table");
+        const head = tb.createTHead().insertRow();
+        for (const c of r.table.columns) head.append(text("th", "", c));
+        for (const row of r.table.rows) { const tr = tb.insertRow(); for (const v of row) tr.insertCell().textContent = v; }
+        it.append(tb);
+      }
+      for (const d of r.documents || []) {
+        const doc = el("div", "m-item talk-doc");
+        doc.append(text("span", "m-nm", d.title), text("span", "sub", d.kind));
+        doc.onclick = async () => { // an article the phone keeps opens in its Reader; the others live on the desk
+          const a = d.kind === "article" && (await all("articles")).find(x => "Articles/" + x.file === d.path);
+          if (a) { openApp("reader"); APPS.reader.read(a); } else toast(d.kind === "memo" ? "Memos are read on the desk" : "Not on this phone yet: it comes with the next sync");
+        };
+        it.append(doc);
+      }
+      if (r.chips?.length) {
+        const row = el("div", "m-row talk-answers");
+        for (const c of r.chips) { const b = text("button", "m-btn chip", c); b.type = "button"; b.onclick = () => this.say(c); row.append(b); }
+        it.append(row);
+      }
+      const shown = r.screen || r.show;
+      const how = r.screen ? "desk's screen" : r.ran === "read" ? "ran" : r.ran || (r.outcome === "approve" ? "would run" : "");
+      this.add(it, ...(shown ? [text("div", "m-muted talk-cmd", "$ " + shown + (how ? "  · " + how : ""))] : []));
     },
   },
   // the phone as the desk's trackpad, over Bluetooth: only where the browser has Bluetooth
