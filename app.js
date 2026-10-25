@@ -19,6 +19,7 @@ const toast = (msg, ok) => {
 // icons: symbios mobile's 1-bit line glyphs
 const I = {
   reader: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h7v14H4zM13 5h7v14h-7"/><path d="M6.5 8.5h2M6.5 11h2M15.5 8.5h2M15.5 11h2"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
   status: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 13h4l2 5 4-12 2 7h6"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11l6.6-3.6M8.2 13l6.6 3.6"/></svg>',
@@ -540,7 +541,12 @@ const APPS = {
         const tb = el("table");
         const head = tb.createTHead().insertRow();
         for (const c of r.table.columns) head.append(text("th", "", c));
-        for (const row of r.table.rows) { const tr = tb.insertRow(); for (const v of row) tr.insertCell().textContent = v; }
+        // a row's mark (lock: a Wi-Fi network that asks for a password) before its first cell (Gab, 25 Oct: "Simple shape and one color")
+        r.table.rows.forEach((row, i) => {
+          const tr = tb.insertRow();
+          for (const v of row) tr.insertCell().textContent = v;
+          if ((r.table.marks || [])[i] === "lock") { const m = el("span", "talk-mark"); m.innerHTML = I.lock; tr.cells[0].prepend(m); }
+        });
         it.append(tb);
       }
       for (const d of r.documents || []) {
