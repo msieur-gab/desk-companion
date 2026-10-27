@@ -73,12 +73,24 @@ export async function session(at) {
     return { n: mine, sealed: await subtle.encrypt({ name: "AES-GCM", iv: nonce(mine), additionalData: bound(sid, route, "up") }, up, bytes) };
   };
   const unseal = (m, route, sealed) => subtle.decrypt({ name: "AES-GCM", iv: nonce(m), additionalData: bound(sid, route, "down") }, down, sealed);
-  // a sealed request over the network: the route's method and path are what the message is bound to
-  const send = async (method, path, bytes) => {
+  // a sealed request over the network, bound to its method and full path (?name= and all); its answer comes sealed.
+  // A refusal comes plain, as { error }, with its status on the error thrown
+  const send = async (method, path, bytes, ms) => {
     const route = method + " " + path, { n: m, sealed } = await seal(route, bytes || new Uint8Array());
-    const r = await fetch("http://" + at + path, { method, headers: { "Content-Type": "application/octet-stream", "X-Session": sid, "X-N": String(m) }, body: sealed });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "the desk answered " + r.status);
+    const r = await fetch("http://" + at + path, { method, signal: ms ? AbortSignal.timeout(ms) : undefined,
+      headers: { "Content-Type": "application/octet-stream", "X-Session": sid, "X-N": String(m) }, body: sealed });
+    if (!r.ok) throw Object.assign(new Error((await r.json().catch(() => ({}))).error || "the desk answered " + r.status), { status: r.status });
     return new Uint8Array(await unseal(+r.headers.get("X-N"), route, await r.arrayBuffer()));
   };
-  return { sid, seal, unseal, send };
+  return { sid, at, seal, unseal, send };
+}
+
+// one session kept per address, opened when first needed; when the desk no longer knows it (it restarted), a new
+// one is opened and the request sent once more
+let kept = null;
+export async function request(at, method, path, bytes, ms) {
+  for (const fresh of [false, true]) {
+    if (fresh || !kept || kept.at !== at) kept = await session(at);
+    try { return await kept.send(method, path, bytes, ms); } catch (e) { if (e.status !== 401 || fresh) throw e; }
+  }
 }

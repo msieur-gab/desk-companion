@@ -45,6 +45,8 @@ let cable = false;
 async function desk(path, body, ms, blob) {
   const at = cable ? CABLE : await setting("desk");
   if (!at) throw Object.assign(new Error("no desk address yet"), { away: true });
+  // a route the desk keeps locked (its /api/hello says which) goes sealed, once this phone owns the desk
+  if (hello?.locked?.includes((body ? "POST " : "GET ") + path.split("?")[0]) && await trust.owned()) return sealedDesk(at, path, body, ms, blob);
   const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms || (body ? 45000 : 8000));
   const post = body instanceof Blob ? { method: "POST", headers: { "Content-Type": body.type || "application/octet-stream" }, body }
     : body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
@@ -57,6 +59,18 @@ async function desk(path, body, ms, blob) {
   } catch (e) {
     throw e.refused !== undefined ? e : Object.assign(new Error("the desk is out of reach"), { away: true });
   } finally { clearTimeout(timer); }
+}
+
+async function sealedDesk(at, path, body, ms, blob) {
+  const bytes = body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : body ? new TextEncoder().encode(JSON.stringify(body)) : null;
+  let got;
+  try {
+    got = await trust.request(at, body ? "POST" : "GET", path, bytes, ms || (body ? 45000 : 8000));
+  } catch (e) {
+    if (e.status) throw Object.assign(e, { refused: e.status === 422 });
+    throw Object.assign(new Error("the desk is out of reach"), { away: true });
+  }
+  return blob ? new Blob([got]) : JSON.parse(new TextDecoder().decode(got) || "{}");
 }
 
 // ---- finding the desk on a new network: a page cannot list what is on the network, so it knocks
