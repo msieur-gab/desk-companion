@@ -670,7 +670,8 @@ const APPS = {
         list.append(give);
       }
       list.append(kv("owner", await ownerSays()));
-      if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => claimDesk(c); list.append(c); }
+      if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => askClaim(c); list.append(c); }
+      if (hello?.claimed && hello.board === (await trust.owned())?.boardId) list.append(...await openScreens());
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
       if (at || cable) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + (cable ? CABLE : at) + "/", "_blank", "noopener"); list.append(go); }
@@ -682,6 +683,27 @@ const APPS = {
     fresh() { if (!back && !body.contains(document.activeElement)) APPS.settings.open(); }, // not over the WiFi or the trackpad, nor under a half-typed address
   },
 };
+
+// the screens let in now (Settings): a tap disconnects one, let in by mistake (Gab, 2026-10-27: "it will disconnect
+// from device you may have approved by mistake"); it is back on its lock screen within a few seconds
+async function openScreens() {
+  const got = (await desk("/api/screen/open").catch(() => null))?.screens;
+  if (!got) return [];
+  const since = t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const close = (id, what) => async () => {
+    try { await desk("/api/screen/close", { id }); toast(what + " disconnected", true); }
+    catch (e) { toast("Disconnecting: " + e.message, false); }
+    if (open === "settings") APPS.settings.open();
+  };
+  const rows = [text("div", "m-pad", got.length ? "SCREENS OPEN NOW · tap one to disconnect it" : "SCREENS OPEN NOW · none")];
+  for (const w of got) {
+    const r = row(I.lock, whereFrom(w), "since " + since(w.since) + " · disconnect");
+    r.onclick = close(w.id, "The screen");
+    rows.push(r);
+  }
+  if (got.length > 1) { const all = row(I.lock, "Disconnect every screen", "tap"); all.onclick = close("all", "Every screen"); rows.push(all); }
+  return rows;
+}
 
 // ---- the claim: the first phone over the cable becomes the desk's owner (trust.js; the desk's SECURE-LINK.md).
 // The claim makes the keys, and a sealed hello proves both sides agree; then the desk opens only to this phone ----
@@ -697,8 +719,13 @@ function claimCard() {
   card.hidden = !(hello?.claimed === false && trust.usable);
   if (card.hidden || card.firstChild) return;
   const c = row(I.lock, "This desk has no owner yet", "claim it");
-  c.onclick = () => claimDesk(c);
+  c.onclick = () => askClaim(c);
   card.append(c);
+}
+function askClaim(r) {
+  ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
+    says: "It becomes yours: from then on it opens only for this phone, and every screen showing it asks this phone first. The claim goes over the USB cable, with the phone's WiFi and mobile data off." })
+    .answer.then(yes => yes && claimDesk(r));
 }
 async function claimDesk(r) {
   if (r.busy) return;
@@ -722,30 +749,58 @@ async function claimDesk(r) {
   if (open === "settings") APPS.settings.open();
 }
 
+// ---- the ask sheet: one question at a time, rising from the bottom above everything (symbios' sheet), its words in
+// the text colour (Gab, 2026-10-27: "the text is hard to read … shall we think of having a … reusable component …
+// it could also be used for pairing or claiming"). ask() gives { answer, close }: answer is true (yes), false (no), or
+// null (the sheet was dismissed, or closed because the question went away) ----
+const sheet = document.getElementById("ask"), sheetScrim = document.getElementById("ask-scrim");
+let asked = Promise.resolve();
+function ask({ title, code, says, yes, no }) {
+  let done, end = null, gone = false;
+  const answer = new Promise(r => { done = r; });
+  asked = asked.then(() => gone ? null : new Promise(next => {
+    end = a => {
+      sheet.classList.remove("open"); sheetScrim.classList.remove("open"); sheet.setAttribute("aria-hidden", "true");
+      end = null; done(a); setTimeout(next, 260); // the next question after this one has slid away
+    };
+    const btn = (label, primary, a) => Object.assign(text("button", "m-btn" + (primary ? " primary" : ""), label), { type: "button", onclick: () => end?.(a) });
+    const btns = el("div", "ask-btns");
+    btns.append(btn(no, false, false), btn(yes, true, true));
+    sheet.replaceChildren(el("div", "pane-grab"), text("div", "ask-title", title), ...(code ? [text("div", "ask-code", code)] : []), text("div", "ask-says", says), btns);
+    sheetScrim.onclick = () => end?.(null);
+    sheet.classList.add("open"); sheetScrim.classList.add("open"); sheet.setAttribute("aria-hidden", "false");
+  }));
+  return { answer, close() { gone = true; end ? end(null) : done(null); } };
+}
+
 // ---- screens asking to open the desk (its SECURE-LINK.md, step 5): the HDMI kiosk or a laptop shows a code on a lock
-// screen; the same code shows here, with Allow and Refuse. Asked each time the desk is reached (every 15 s, on opening) ----
+// screen; the phone asks the same code in the ask sheet, with Allow and Refuse, as soon as it sees it (each time it
+// reaches the desk: every 15 s, on opening). Dismissed, the screen stays as a line on the home; a tap asks again ----
 const WHERE_FROM = { hdmi: "the board's HDMI screen", cable: "a computer on the USB cable", wifi: "a computer on the WiFi" };
+const whereFrom = w => WHERE_FROM[w.kind] + (w.kind === "wifi" ? " (" + w.ip + ")" : "");
+const asking = new Map(); // id → the ask sheet's handle, for each screen asked about
+function askScreen(w) {
+  const q = ask({ title: "A screen wants to open the desk", code: w.code, yes: "ALLOW", no: "REFUSE",
+    says: "From " + whereFrom(w) + ". Allow it only if this is the code on that screen." });
+  asking.set(w.id, q);
+  q.answer.then(async allow => {
+    if (allow === null) return;
+    try { await desk("/api/screen/answer", { id: w.id, allow }); toast(allow ? "Screen allowed" : "Screen refused", allow); }
+    catch (e) { toast("The answer: " + e.message, false); }
+    screensCard();
+  });
+}
 async function screensCard() {
   const box = document.getElementById("screens");
-  let asking = [];
-  if (hello?.claimed && hello.board === (await trust.owned())?.boardId) asking = (await desk("/api/screen/pending").catch(() => ({}))).screens || [];
-  box.hidden = !asking.length;
-  box.replaceChildren(...asking.map(w => {
+  let waiting = [];
+  if (hello?.claimed && hello.board === (await trust.owned())?.boardId) waiting = (await desk("/api/screen/pending").catch(() => ({}))).screens || [];
+  for (const [id, q] of asking) if (!waiting.some(w => w.id === id)) { q.close(); asking.delete(id); } // answered, or the code ran out
+  for (const w of waiting) if (!asking.has(w.id)) askScreen(w);
+  box.hidden = !waiting.length;
+  box.replaceChildren(...waiting.map(w => {
     const r = row(I.lock, "A screen wants to open the desk", "code " + w.code);
-    r.title = WHERE_FROM[w.kind] + (w.kind === "wifi" ? " (" + w.ip + ")" : "");
-    const line = el("div", "m-pad");
-    const answer = allow => async () => {
-      try { await desk("/api/screen/answer", { id: w.id, allow }); toast(allow ? "Screen allowed" : "Screen refused", allow); }
-      catch (e) { toast("The answer: " + e.message, false); }
-      screensCard();
-    };
-    const yes = Object.assign(text("button", "m-btn primary", "ALLOW"), { type: "button", onclick: answer(true) });
-    const no = Object.assign(text("button", "m-btn", "REFUSE"), { type: "button", onclick: answer(false) });
-    no.style.marginLeft = "8px";
-    line.append(text("div", "m-muted", WHERE_FROM[w.kind] + (w.kind === "wifi" ? " · " + w.ip : "") + ". Allow it only if this code is the one on that screen."), el("div", "", "&nbsp;"), yes, no);
-    const one = el("div");
-    one.append(r, line);
-    return one;
+    r.onclick = () => { asking.get(w.id)?.close(); askScreen(w); };
+    return r;
   }));
 }
 
