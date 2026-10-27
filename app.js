@@ -676,11 +676,13 @@ function claimCard() {
 }
 async function claimDesk(r) {
   if (r.busy) return;
-  const at = await setting("desk"), sub = r.querySelector(".sub");
-  if (at !== "10.55.0.1") return toast("Plug your phone into the desk to claim it", false);
+  // always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on still talks
+  // to the desk over the WiFi, and the desk refuses a claim that comes that way
+  const at = "10.55.0.1", sub = r.querySelector(".sub");
   r.busy = true;
   sub.textContent = "claiming…";
   try {
+    if (!await knock([at], 3000)) throw new Error("the desk isn't on the cable. Plug the phone in, turn its WiFi and mobile data off, then claim again");
     await trust.claim(at, navigator.userAgentData?.platform || "phone");
     sub.textContent = "checking…";
     const s = await trust.session(at), said = JSON.parse(new TextDecoder().decode(await s.send("POST", "/api/trust/ping")));
