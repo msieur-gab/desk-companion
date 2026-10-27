@@ -671,6 +671,9 @@ const APPS = {
       }
       list.append(kv("owner", await ownerSays()));
       if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => askClaim(c); list.append(c); }
+      const mine = await trust.owned();
+      if (hello?.claimed && hello.board === mine?.boardId) { const w = row(I.lock, "Secret word", hello.word ? "set · change" : "not set · set it"); w.onclick = () => askWord(hello.word); list.append(w); }
+      else if (hello?.claimed && hello.word && trust.usable) { const t = row(I.lock, "Take this desk back", "over the cable"); t.onclick = () => askTakeBack(t); list.append(t); }
       if (hello?.claimed && hello.board === (await trust.owned())?.boardId) list.append(...await openScreens());
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
@@ -714,48 +717,76 @@ async function ownerSays() {
   if (hello?.claimed) return "claimed by another phone";
   return hello ? "not claimed" : "unknown (out of reach)";
 }
-function claimCard() {
-  const card = document.getElementById("claim");
-  card.hidden = !(hello?.claimed === false && trust.usable);
-  if (card.hidden || card.firstChild) return;
-  const c = row(I.lock, "This desk has no owner yet", "claim it");
-  c.onclick = () => askClaim(c);
-  card.append(c);
+// the home's line about the claim: a desk with no owner, or, on the cable, a desk another phone owns that has a secret
+// word (a lost phone's: this one may take it back). Over the WiFi, someone else's desk stays out of the way
+async function claimCard() {
+  const card = document.getElementById("claim"), mine = await trust.owned();
+  const state = !trust.usable || !hello ? "" : hello.claimed === false ? "free"
+    : cable && hello.word && hello.board !== mine?.boardId ? "taken" : "";
+  card.hidden = !state;
+  if (card.dataset.state === state) return;
+  card.dataset.state = state;
+  const c = state === "free" ? row(I.lock, "This desk has no owner yet", "claim it") : row(I.lock, "This desk has another owner", "yours? take it back");
+  c.onclick = () => state === "free" ? askClaim(c) : askTakeBack(c);
+  card.replaceChildren(...(state ? [c] : []));
+}
+function askTakeBack(r) {
+  ask({ title: "Take this desk back", yes: "TAKE IT BACK", no: "CANCEL",
+    says: "For a desk that was yours on a phone you lost or reset. Type its secret word: this phone becomes its owner, and the old phone is shut out. Over the USB cable only.",
+    field: { placeholder: "the secret word", check: v => v ? "" : "Type the secret word" } })
+    .answer.then(word => word && claimDesk(r, word));
+}
+// the secret word (the desk's SECURE-LINK.md, step 6): offered right after the claim, set or changed in Settings
+function askWord(change) {
+  ask({ title: change ? "Change the secret word" : "A secret word for this desk", yes: "SET", no: change ? "CANCEL" : "LATER",
+    says: "If this phone is lost, a new phone plugged into the desk by cable takes it back with this word. At least 8 characters: a few words are easy to remember. The desk keeps no copy it could show you, so write it down somewhere safe." + (change ? "" : " You can also set it later, in Settings."),
+    field: { placeholder: "the secret word", twice: true, check: v => v.length < 8 ? "At least 8 characters" : "" } })
+    .answer.then(async word => {
+      if (!word) return;
+      try { await desk("/api/trust/word", { word }); toast("Secret word set", true); }
+      catch (e) { toast("The secret word: " + e.message, false); }
+      await ping();
+      if (open === "settings") APPS.settings.open();
+    });
 }
 function askClaim(r) {
   ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
     says: "It becomes yours: from then on it opens only for this phone, and every screen showing it asks this phone first. The claim goes over the USB cable, with the phone's WiFi and mobile data off." })
     .answer.then(yes => yes && claimDesk(r));
 }
-async function claimDesk(r) {
+async function claimDesk(r, word) {
   if (r.busy) return;
   // always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on still talks
   // to the desk over the WiFi, and the desk refuses a claim that comes that way
-  const at = CABLE, sub = r.querySelector(".sub");
+  const at = CABLE, sub = r.querySelector(".sub"), was = sub.textContent;
+  let ok = false;
   r.busy = true;
   sub.textContent = "claiming…";
   try {
     if (!await knock([at], 3000)) throw new Error("the desk isn't on the cable. Plug the phone in, turn its WiFi and mobile data off, then claim again");
-    await trust.claim(at, navigator.userAgentData?.platform || "phone");
+    await trust.claim(at, navigator.userAgentData?.platform || "phone", word);
     sub.textContent = "checking…";
     const s = await trust.session(at), said = JSON.parse(new TextDecoder().decode(await s.send("POST", "/api/trust/ping")));
     if (!said.pong) throw new Error("the desk didn't answer the check");
-    toast("This desk is yours", true);
+    toast(word ? "This desk is yours again" : "This desk is yours", true);
+    ok = true;
   } catch (e) {
-    sub.textContent = "claim it";
-    toast("The claim: " + e.message, false);
+    sub.textContent = was;
+    toast((word ? "Taking it back: " : "The claim: ") + (e.message === "wrong word" ? "that isn't its secret word" : e.message), false);
   } finally { r.busy = false; }
   await ping();
   if (open === "settings") APPS.settings.open();
+  if (ok && !word) askWord(false);
 }
 
 // ---- the ask sheet: one question at a time, rising from the bottom above everything (symbios' sheet), its words in
 // the text colour (Gab, 2026-10-27: "the text is hard to read … shall we think of having a … reusable component …
 // it could also be used for pairing or claiming"). ask() gives { answer, close }: answer is true (yes), false (no), or
-// null (the sheet was dismissed, or closed because the question went away) ----
+// null (the sheet was dismissed, or closed because the question went away). With a field (the secret word), yes gives
+// what was typed: field = { placeholder, twice (typed twice, to catch a slip), check(value) → why it won't do, or "" } ----
 const sheet = document.getElementById("ask"), sheetScrim = document.getElementById("ask-scrim");
 let asked = Promise.resolve();
-function ask({ title, code, says, yes, no }) {
+function ask({ title, code, says, yes, no, field }) {
   let done, end = null, gone = false;
   const answer = new Promise(r => { done = r; });
   asked = asked.then(() => gone ? null : new Promise(next => {
@@ -763,10 +794,20 @@ function ask({ title, code, says, yes, no }) {
       sheet.classList.remove("open"); sheetScrim.classList.remove("open"); sheet.setAttribute("aria-hidden", "true");
       end = null; done(a); setTimeout(next, 260); // the next question after this one has slid away
     };
-    const btn = (label, primary, a) => Object.assign(text("button", "m-btn" + (primary ? " primary" : ""), label), { type: "button", onclick: () => end?.(a) });
+    const inputs = field ? [field.placeholder, ...(field.twice ? ["the same again"] : [])].map(placeholder =>
+      Object.assign(el("input", "m-input ask-field"), { type: "password", placeholder, autocomplete: "off", autocapitalize: "off", spellcheck: false })) : [];
+    const fail = text("div", "ask-fail", "");
+    const typed = () => {
+      const v = inputs[0].value, why = inputs[1] && inputs[1].value !== v ? "The two don't match" : field.check?.(v) || "";
+      if (why) fail.textContent = why;
+      else end?.(v);
+    };
+    inputs.forEach((input, i) => { input.setAttribute("aria-label", input.placeholder); input.onkeydown = e => { if (e.key === "Enter") i + 1 < inputs.length ? inputs[i + 1].focus() : typed(); }; });
+    const btn = (label, primary, a) => Object.assign(text("button", "m-btn" + (primary ? " primary" : ""), label), { type: "button", onclick: () => a && field ? typed() : end?.(a) });
     const btns = el("div", "ask-btns");
     btns.append(btn(no, false, false), btn(yes, true, true));
-    sheet.replaceChildren(el("div", "pane-grab"), text("div", "ask-title", title), ...(code ? [text("div", "ask-code", code)] : []), text("div", "ask-says", says), btns);
+    sheet.replaceChildren(el("div", "pane-grab"), text("div", "ask-title", title), ...(code ? [text("div", "ask-code", code)] : []), text("div", "ask-says", says), ...inputs, fail, btns);
+    if (inputs.length) setTimeout(() => inputs[0].focus(), 280);
     sheetScrim.onclick = () => end?.(null);
     sheet.classList.add("open"); sheetScrim.classList.add("open"); sheet.setAttribute("aria-hidden", "false");
   }));

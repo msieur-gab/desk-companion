@@ -38,10 +38,12 @@ export async function keyId(bytes) {
 }
 
 // the claim, over the cable: the desk keeps this phone's public key and gives its own
-export async function claim(at, name) {
+// word: the desk's secret word, when this phone takes over a desk another phone owns (a lost phone; the desk's
+// SECURE-LINK.md, step 6). Over the cable only, as the claim itself
+export async function claim(at, name, word) {
   const pair = await phoneKey();
   const r = await fetch("http://" + at + "/api/trust/claim", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: b64(await raw(pair.publicKey)), name }) });
+    body: JSON.stringify({ key: b64(await raw(pair.publicKey)), name, ...(word != null ? { word } : {}) }) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || "the desk answered " + r.status);
   const mine = { board: data.board, boardId: await keyId(unb64(data.board)), id: data.id, host: data.host, since: Date.now() };

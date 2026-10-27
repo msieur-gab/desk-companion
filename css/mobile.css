@@ -331,5 +331,7 @@ canvas.avatar{display:block}
 .ask-title{color:var(--fg);font-size:17px;font-weight:600}
 .ask-code{color:var(--accent);font-size:46px;letter-spacing:.25em;text-align:center;margin:18px 0 6px}
 .ask-says{color:var(--fg);font-size:14px;line-height:1.5;margin:12px 0 20px}
+.ask-field{display:block;width:100%;box-sizing:border-box;margin:0 0 10px}
+.ask-fail{color:var(--fg);font-size:13px;min-height:1.4em;margin:0 0 10px}
 .ask-btns{display:flex;gap:10px}
 .ask-btns .m-btn{flex:1;padding-top:12px;padding-bottom:12px}
