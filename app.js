@@ -37,9 +37,13 @@ const I = {
 // what the phone keeps (IndexedDB: db, store, all, put, drop, setting) is in db.js, shared with the service worker
 
 // ---- the desk, over the local network (plain http: it has no name the world knows) ----
-// body: JSON, or a Blob sent as it is (a file for the inbox)
+// body: JSON, or a Blob sent as it is (a file for the inbox). Over the cable the desk is always at CABLE; ping()
+// tries it when the saved address doesn't answer, so plugging in is enough (Gab, 2026-10-27: "a default 10.55.0.1
+// try could help drastically"). The saved address stays as it is, for when the phone is back on the WiFi.
+const CABLE = "10.55.0.1";
+let cable = false;
 async function desk(path, body, ms, blob) {
-  const at = await setting("desk");
+  const at = cable ? CABLE : await setting("desk");
   if (!at) throw Object.assign(new Error("no desk address yet"), { away: true });
   const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms || (body ? 45000 : 8000));
   const post = body instanceof Blob ? { method: "POST", headers: { "Content-Type": body.type || "application/octet-stream" }, body }
@@ -647,7 +651,7 @@ const APPS = {
       if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => claimDesk(c); list.append(c); }
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
-      if (at) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + at + "/", "_blank", "noopener"); list.append(go); }
+      if (at || cable) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + (cable ? CABLE : at) + "/", "_blank", "noopener"); list.append(go); }
       const standalone = matchMedia("(display-mode: standalone)").matches;
       list.append(kv("on this phone", standalone ? "installed" : offer ? "ready to install" : "in a browser tab"));
       if (offer && !standalone) { const ins = row(I.settings, "Install on this phone"); ins.onclick = async () => { offer.prompt(); await offer.userChoice; APPS.settings.open(); }; list.append(ins); }
@@ -678,7 +682,7 @@ async function claimDesk(r) {
   if (r.busy) return;
   // always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on still talks
   // to the desk over the WiFi, and the desk refuses a claim that comes that way
-  const at = "10.55.0.1", sub = r.querySelector(".sub");
+  const at = CABLE, sub = r.querySelector(".sub");
   r.busy = true;
   sub.textContent = "claiming…";
   try {
@@ -1103,7 +1107,12 @@ tick(); setInterval(tick, 15000);
 let wasOnline = null;
 async function ping() {
   let online = false;
-  try { await desk("/api/status"); online = true; } catch { /* away */ }
+  for (const viaCable of cable ? [true, false] : [false, true]) { // the way that worked last, then the other
+    if (viaCable && !await knock([CABLE], 1500)) continue;
+    cable = viaCable;
+    try { await desk("/api/status"); online = true; break; } catch { /* away this way */ }
+  }
+  if (!online) cable = false;
   hello = online ? await desk("/api/hello").catch(() => null) : null;
   claimCard();
   conn.className = "conn " + (online ? "online" : "offline");
