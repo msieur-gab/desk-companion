@@ -61,6 +61,9 @@ async function desk(path, body, ms, blob) {
   } finally { clearTimeout(timer); }
 }
 
+// the desk (its board id) that refused this phone's sessions: this phone thinks it owns it, the desk doesn't know it
+// (another phone took it over, the reset, or a lost write: 2026-10-27, the cable out right after a takeover)
+let unknownTo = null;
 async function sealedDesk(at, path, body, ms, blob) {
   const bytes = body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : body ? new TextEncoder().encode(JSON.stringify(body)) : null;
   let got;
@@ -68,6 +71,10 @@ async function sealedDesk(at, path, body, ms, blob) {
     got = await trust.request(at, body ? "POST" : "GET", path, bytes, ms || (body ? 45000 : 8000));
   } catch (e) {
     if (e.status) throw Object.assign(e, { refused: e.status === 422 });
+    if (/doesn't know this phone/.test(e.message)) {
+      if (unknownTo !== hello?.board) { unknownTo = hello?.board; claimCard(); }
+      throw Object.assign(new Error("the desk doesn't know this phone any more"), { refused: false });
+    }
     throw Object.assign(new Error("the desk is out of reach"), { away: true });
   }
   return blob ? new Blob([got]) : JSON.parse(new TextDecoder().decode(got) || "{}");
@@ -672,7 +679,7 @@ const APPS = {
       list.append(kv("owner", await ownerSays()));
       if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => askClaim(c); list.append(c); }
       const mine = await trust.owned();
-      if (hello?.claimed && hello.board === mine?.boardId) { const w = row(I.lock, "Secret word", hello.word ? "set · change" : "not set · set it"); w.onclick = () => askWord(hello.word); list.append(w); }
+      if (hello?.claimed && hello.board === mine?.boardId && unknownTo !== hello.board) { const w = row(I.lock, "Secret word", hello.word ? "set · change" : "not set · set it"); w.onclick = () => askWord(hello.word); list.append(w); }
       else if (hello?.claimed && hello.word && trust.usable) { const t = row(I.lock, "Take this desk back", "over the cable"); t.onclick = () => askTakeBack(t); list.append(t); }
       if (hello?.claimed && hello.board === (await trust.owned())?.boardId) list.append(...await openScreens());
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
@@ -713,6 +720,7 @@ async function openScreens() {
 let hello = null; // what the desk said last at /api/hello: { claimed, board, … }, or null when out of reach
 async function ownerSays() {
   const mine = await trust.owned(), day = t => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (mine && hello && hello.board === unknownTo) return "the desk doesn't know this phone any more";
   if (mine && (!hello || hello.board === mine.boardId)) return "yours since " + day(mine.since) + (hello ? "" : " (out of reach)");
   if (hello?.claimed) return "claimed by another phone";
   return hello ? "not claimed" : "unknown (out of reach)";
@@ -722,7 +730,7 @@ async function ownerSays() {
 async function claimCard() {
   const card = document.getElementById("claim"), mine = await trust.owned();
   const state = !trust.usable || !hello ? "" : hello.claimed === false ? "free"
-    : cable && hello.word && hello.board !== mine?.boardId ? "taken" : "";
+    : cable && hello.word && (hello.board !== mine?.boardId || unknownTo === hello.board) ? "taken" : "";
   card.hidden = !state;
   if (card.dataset.state === state) return;
   card.dataset.state = state;
@@ -770,6 +778,7 @@ async function claimDesk(r, word) {
     if (!said.pong) throw new Error("the desk didn't answer the check");
     toast(word ? "This desk is yours again" : "This desk is yours", true);
     ok = true;
+    unknownTo = null;
   } catch (e) {
     sub.textContent = was;
     toast((word ? "Taking it back: " : "The claim: ") + (e.message === "wrong word" ? "that isn't its secret word" : e.message), false);
