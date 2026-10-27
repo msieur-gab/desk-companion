@@ -722,6 +722,33 @@ async function claimDesk(r) {
   if (open === "settings") APPS.settings.open();
 }
 
+// ---- screens asking to open the desk (its SECURE-LINK.md, step 5): the HDMI kiosk or a laptop shows a code on a lock
+// screen; the same code shows here, with Allow and Refuse. Asked each time the desk is reached (every 15 s, on opening) ----
+const WHERE_FROM = { hdmi: "the board's HDMI screen", cable: "a computer on the USB cable", wifi: "a computer on the WiFi" };
+async function screensCard() {
+  const box = document.getElementById("screens");
+  let asking = [];
+  if (hello?.claimed && hello.board === (await trust.owned())?.boardId) asking = (await desk("/api/screen/pending").catch(() => ({}))).screens || [];
+  box.hidden = !asking.length;
+  box.replaceChildren(...asking.map(w => {
+    const r = row(I.lock, "A screen wants to open the desk", "code " + w.code);
+    r.title = WHERE_FROM[w.kind] + (w.kind === "wifi" ? " (" + w.ip + ")" : "");
+    const line = el("div", "m-pad");
+    const answer = allow => async () => {
+      try { await desk("/api/screen/answer", { id: w.id, allow }); toast(allow ? "Screen allowed" : "Screen refused", allow); }
+      catch (e) { toast("The answer: " + e.message, false); }
+      screensCard();
+    };
+    const yes = Object.assign(text("button", "m-btn primary", "ALLOW"), { type: "button", onclick: answer(true) });
+    const no = Object.assign(text("button", "m-btn", "REFUSE"), { type: "button", onclick: answer(false) });
+    no.style.marginLeft = "8px";
+    line.append(text("div", "m-muted", WHERE_FROM[w.kind] + (w.kind === "wifi" ? " · " + w.ip : "") + ". Allow it only if this code is the one on that screen."), el("div", "", "&nbsp;"), yes, no);
+    const one = el("div");
+    one.append(r, line);
+    return one;
+  }));
+}
+
 // a link is removed on the second tap, so a slip of the thumb doesn't lose it
 let armed = null;
 // the WiFi to give the desk: a name, a password, and what the desk says as it goes
@@ -1141,6 +1168,7 @@ async function ping() {
   }
   if (!online) { cable = false; hello = null; }
   claimCard();
+  screensCard();
   conn.className = "conn " + (online ? "online" : "offline");
   connLabel.textContent = online ? "desk" : "offline";
   if (online && wasOnline !== true) sync(false); // the desk came in reach: hand over, bring back
