@@ -45,8 +45,8 @@ let cable = false;
 async function desk(path, body, ms, blob) {
   const at = cable ? CABLE : await setting("desk");
   if (!at) throw Object.assign(new Error("no desk address yet"), { away: true });
-  // a route the desk keeps locked (its /api/hello says which) goes sealed, once this phone owns the desk
-  if (hello?.locked?.includes((body ? "POST " : "GET ") + path.split("?")[0]) && await trust.owned()) return sealedDesk(at, path, body, ms, blob);
+  // the desk keeps every route locked but a few (its /api/hello says which): once this phone owns the desk, the others go sealed
+  if (!(hello?.open || ["GET /api/hello"]).includes((body ? "POST " : "GET ") + path.split("?")[0]) && await trust.owned()) return sealedDesk(at, path, body, ms, blob);
   const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms || (body ? 45000 : 8000));
   const post = body instanceof Blob ? { method: "POST", headers: { "Content-Type": body.type || "application/octet-stream" }, body }
     : body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
@@ -676,7 +676,7 @@ const APPS = {
 };
 
 // ---- the claim: the first phone over the cable becomes the desk's owner (trust.js; the desk's SECURE-LINK.md).
-// Nothing is locked yet: the claim only makes the keys, and a sealed hello proves both sides agree ----
+// The claim makes the keys, and a sealed hello proves both sides agree; then the desk opens only to this phone ----
 let hello = null; // what the desk said last at /api/hello: { claimed, board, … }, or null when out of reach
 async function ownerSays() {
   const mine = await trust.owned(), day = t => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -1124,10 +1124,9 @@ async function ping() {
   for (const viaCable of cable ? [true, false] : [false, true]) { // the way that worked last, then the other
     if (viaCable && !await knock([CABLE], 1500)) continue;
     cable = viaCable;
-    try { await desk("/api/status"); online = true; break; } catch { /* away this way */ }
+    try { hello = await desk("/api/hello"); online = true; break; } catch { /* away this way */ } // open to all: in reach, owned or not
   }
-  if (!online) cable = false;
-  hello = online ? await desk("/api/hello").catch(() => null) : null;
+  if (!online) { cable = false; hello = null; }
   claimCard();
   conn.className = "conn " + (online ? "online" : "offline");
   connLabel.textContent = online ? "desk" : "offline";

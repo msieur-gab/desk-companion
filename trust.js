@@ -77,8 +77,10 @@ export async function session(at) {
   // A refusal comes plain, as { error }, with its status on the error thrown
   const send = async (method, path, bytes, ms) => {
     const route = method + " " + path, { n: m, sealed } = await seal(route, bytes || new Uint8Array());
-    const r = await fetch("http://" + at + path, { method, signal: ms ? AbortSignal.timeout(ms) : undefined,
-      headers: { "Content-Type": "application/octet-stream", "X-Session": sid, "X-N": String(m) }, body: sealed });
+    // a GET can't carry a body: its seal (no text, the proof alone) goes as X-Seal
+    const get = method === "GET", r = await fetch("http://" + at + path, { method, signal: ms ? AbortSignal.timeout(ms) : undefined,
+      headers: { "X-Session": sid, "X-N": String(m), ...(get ? { "X-Seal": b64(sealed) } : { "Content-Type": "application/octet-stream" }) },
+      body: get ? undefined : sealed });
     if (!r.ok) throw Object.assign(new Error((await r.json().catch(() => ({}))).error || "the desk answered " + r.status), { status: r.status });
     return new Uint8Array(await unseal(+r.headers.get("X-N"), route, await r.arrayBuffer()));
   };
