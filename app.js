@@ -6,6 +6,8 @@
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
+import * as trust from "./trust.js";
+
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
 // a short message over everything, as symbios mobile shows them
@@ -641,6 +643,8 @@ const APPS = {
         give.onclick = () => { inside(() => APPS.settings.open()); giveWifi(); };
         list.append(give);
       }
+      list.append(kv("owner", await ownerSays()));
+      if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => claimDesk(c); list.append(c); }
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
       if (at) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + at + "/", "_blank", "noopener"); list.append(go); }
@@ -652,6 +656,43 @@ const APPS = {
     fresh() { if (!back && !body.contains(document.activeElement)) APPS.settings.open(); }, // not over the WiFi or the trackpad, nor under a half-typed address
   },
 };
+
+// ---- the claim: the first phone over the cable becomes the desk's owner (trust.js; the desk's SECURE-LINK.md).
+// Nothing is locked yet: the claim only makes the keys, and a sealed hello proves both sides agree ----
+let hello = null; // what the desk said last at /api/hello: { claimed, board, … }, or null when out of reach
+async function ownerSays() {
+  const mine = await trust.owned(), day = t => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (mine && (!hello || hello.board === mine.boardId)) return "yours since " + day(mine.since) + (hello ? "" : " (out of reach)");
+  if (hello?.claimed) return "claimed by another phone";
+  return hello ? "not claimed" : "unknown (out of reach)";
+}
+function claimCard() {
+  const card = document.getElementById("claim");
+  card.hidden = !(hello?.claimed === false && trust.usable);
+  if (card.hidden || card.firstChild) return;
+  const c = row(I.lock, "This desk has no owner yet", "claim it");
+  c.onclick = () => claimDesk(c);
+  card.append(c);
+}
+async function claimDesk(r) {
+  if (r.busy) return;
+  const at = await setting("desk"), sub = r.querySelector(".sub");
+  if (at !== "10.55.0.1") return toast("Plug your phone into the desk to claim it", false);
+  r.busy = true;
+  sub.textContent = "claiming…";
+  try {
+    await trust.claim(at, navigator.userAgentData?.platform || "phone");
+    sub.textContent = "checking…";
+    const s = await trust.session(at), said = JSON.parse(new TextDecoder().decode(await s.send("POST", "/api/trust/ping")));
+    if (!said.pong) throw new Error("the desk didn't answer the check");
+    toast("This desk is yours", true);
+  } catch (e) {
+    sub.textContent = "claim it";
+    toast("The claim: " + e.message, false);
+  } finally { r.busy = false; }
+  await ping();
+  if (open === "settings") APPS.settings.open();
+}
 
 // a link is removed on the second tap, so a slip of the thumb doesn't lose it
 let armed = null;
@@ -1061,6 +1102,8 @@ let wasOnline = null;
 async function ping() {
   let online = false;
   try { await desk("/api/status"); online = true; } catch { /* away */ }
+  hello = online ? await desk("/api/hello").catch(() => null) : null;
+  claimCard();
   conn.className = "conn " + (online ? "online" : "offline");
   connLabel.textContent = online ? "desk" : "offline";
   if (online && wasOnline !== true) sync(false); // the desk came in reach: hand over, bring back
