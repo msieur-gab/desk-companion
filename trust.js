@@ -49,24 +49,31 @@ export async function claim(at, name) {
   return mine;
 }
 
-// a session with the desk at this address: { seal, unseal, send }
-export async function session(at) {
+// the session's keys, whatever carries the asking: ask({ id, key }) → the desk's { session, key }
+async function agree(ask) {
   const pair = await phoneKey(), mine = await owned();
   if (!mine) throw new Error("this phone hasn't claimed a desk");
   const once = await subtle.generateKey(P256, false, ["deriveBits"]), onceRaw = await raw(once.publicKey);
-  const r = await fetch("http://" + at + "/api/trust/session", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: mine.id, key: b64(onceRaw) }) });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || "the desk answered " + r.status);
+  const data = await ask({ id: mine.id, key: b64(onceRaw) });
+  if (data.error) throw new Error(data.error === "refused" ? "the desk doesn't know this phone" : data.error);
   const theirs = unb64(data.key);
   const both = join(
     await subtle.deriveBits({ name: "ECDH", public: await point(unb64(mine.board)) }, pair.privateKey, 256),
     await subtle.deriveBits({ name: "ECDH", public: await point(theirs) }, once.privateKey, 256));
   const ikm = await subtle.importKey("raw", both, "HKDF", false, ["deriveBits"]);
   const keys = new Uint8Array(await subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: join(onceRaw, theirs), info: INFO }, ikm, 512));
-  const up = await subtle.importKey("raw", keys.slice(0, 32), "AES-GCM", false, ["encrypt"]);
-  const down = await subtle.importKey("raw", keys.slice(32), "AES-GCM", false, ["decrypt"]);
-  const sid = data.session;
+  return { sid: data.session, up: await subtle.importKey("raw", keys.slice(0, 32), "AES-GCM", false, ["encrypt"]),
+    down: await subtle.importKey("raw", keys.slice(32), "AES-GCM", false, ["decrypt"]) };
+}
+
+// a session with the desk at this address, over the network: { seal, unseal, send }
+export async function session(at) {
+  const { sid, up, down } = await agree(async ask => {
+    const r = await fetch("http://" + at + "/api/trust/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ask) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok && !data.error) data.error = "the desk answered " + r.status;
+    return data;
+  });
   let n = 0;
   const seal = async (route, bytes) => {
     const mine = ++n;
@@ -85,6 +92,29 @@ export async function session(at) {
     return new Uint8Array(await unseal(+r.headers.get("X-N"), route, await r.arrayBuffer()));
   };
   return { sid, at, seal, unseal, send };
+}
+
+// a session over Bluetooth, through the desk's session value (desk-bluetooth): { steer(text) → the bytes to write,
+// join(object) → the bytes to write }. Moves and clicks go as a frame (the session, the number, the sealed lines);
+// a WiFi as JSON, which may come in pieces
+export async function overBluetooth(value) {
+  const { sid, up } = await agree(async ask => {
+    await value.writeValueWithResponse(new TextEncoder().encode(JSON.stringify(ask)));
+    return JSON.parse(new TextDecoder().decode(await value.readValue()));
+  });
+  let n = 0;
+  const seal = async (route, bytes) => { const mine = ++n; return { n: mine, sealed: new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv: nonce(mine), additionalData: bound(sid, route, "up") }, up, bytes)) }; };
+  return {
+    async steer(text) {
+      const { n: m, sealed } = await seal("BT steer", new TextEncoder().encode(text)), head = new Uint8Array(20);
+      head.set(unb64(sid)); new DataView(head.buffer).setBigUint64(12, BigInt(m));
+      return join(head, sealed);
+    },
+    async join(asked) {
+      const { n: m, sealed } = await seal("BT join", new TextEncoder().encode(JSON.stringify(asked)));
+      return new TextEncoder().encode(JSON.stringify({ s: sid, n: m, c: b64(sealed) }));
+    },
+  };
 }
 
 // one session kept per address, opened when first needed; when the desk no longer knows it (it restarted), a new

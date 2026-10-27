@@ -103,6 +103,14 @@ async function hunt(step) {
 
 // ---- or ask the desk itself, over Bluetooth: it says where it is, on any WiFi (desk-bluetooth) ----
 const BT_SERVICE = "d35c0001-5e5a-4d3e-9b1f-6c0de5c0de01", BT_WHERE = "d35c0002-5e5a-4d3e-9b1f-6c0de5c0de01";
+const BT_SESSION = "d35c0006-5e5a-4d3e-9b1f-6c0de5c0de01";
+// once this phone owns a desk, what it writes over Bluetooth is sealed in a session opened on connecting (the desk's
+// SECURE-LINK.md, step 4); a desk with no owner yet (or an older one, with no session value) takes it plain, as before
+async function bleSealer(service) {
+  if (!await trust.owned()) return null;
+  try { return await trust.overBluetooth(await service.getCharacteristic(BT_SESSION)); } catch { return null; }
+}
+const bleWrite = async (value, seal, text) => value.writeValueWithoutResponse(seal ? await seal.steer(text) : new TextEncoder().encode(text));
 async function askBluetooth(step) {
   const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
   step("connecting to " + (device.name || "the desk"));
@@ -114,15 +122,15 @@ async function askBluetooth(step) {
 }
 
 // give the desk a WiFi over Bluetooth: it joins while the phone stays connected, then says how it went.
-// EXPERIMENT: the desk takes this from any phone near it for now; who may is to be settled later.
+// Once the desk has an owner, it takes this only from the owner's phone, sealed.
 const BT_JOIN = "d35c0003-5e5a-4d3e-9b1f-6c0de5c0de01";
 async function joinBluetooth(ssid, password, step) {
   const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
   step("connecting to " + (device.name || "the desk"));
   try {
-    const join = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_JOIN);
-    const read = async () => JSON.parse(new TextDecoder().decode(await join.readValue()));
-    await join.writeValueWithResponse(new TextEncoder().encode(JSON.stringify({ ssid, password })));
+    const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE), join = await service.getCharacteristic(BT_JOIN);
+    const read = async () => JSON.parse(new TextDecoder().decode(await join.readValue())), seal = await bleSealer(service);
+    await join.writeValueWithResponse(seal ? await seal.join({ ssid, password }) : new TextEncoder().encode(JSON.stringify({ ssid, password })));
     step("sent; the desk is trying “" + ssid + "”");
     for (let s = 0; s < 180; s += 2) { // desk-wifi waits up to a minute per try, and may try twice
       await new Promise(r => setTimeout(r, 2000));
@@ -755,19 +763,23 @@ function giveWifi() {
 const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
 // the desk picked for the trackpad stays picked while the companion runs: back on the Remote, the phone
 // joins it again by itself, with no Bluetooth list (Android drops the link when the companion is left)
-let device = null, steer = null;
+let device = null, steer = null, steerSeal = null;
 function steerDesk(slot) {
   const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const stop = () => { device?.gatt.disconnect(); steer = null; };
-  const pad = trackpad(t => steer.writeValueWithoutResponse(new TextEncoder().encode(t)), () => !!steer,
+  const pad = trackpad(t => bleWrite(steer, steerSeal, t), () => !!steer,
     e => { said.textContent = "Bluetooth: " + e.message; stop(); go.disabled = false; });
   const rate = setInterval(() => { pace.textContent = steer ? pad.rate() + " sends a second" : ""; }, 1000);
   const join = async () => {
     go.disabled = true;
     said.textContent = "connecting to " + (device.name || "the desk");
     device.ongattserverdisconnected = () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; }; // this screen's, not a closed one's
-    if (!steer || !device.gatt.connected) steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
+    if (!steer || !device.gatt.connected) {
+      const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE);
+      steerSeal = await bleSealer(service); // a new session on each connection
+      steer = await service.getCharacteristic(BT_STEER);
+    }
     said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
   };
   const rejoin = () => { if (device && !document.hidden) join().catch(() => { stop(); go.disabled = false; said.textContent = "The desk did not answer. Tap Connect."; }); };
@@ -958,7 +970,7 @@ function present(deck, slot) {
   };
   const say = words => {
     (queue = queue.catch(() => {}).then(async () => {
-      if (ble) await ble.steer.writeValueWithoutResponse(new TextEncoder().encode("p " + words));
+      if (ble) await bleWrite(ble.steer, ble.seal, "p " + words);
       else { const s = await desk("/api/slides", { do: words }); got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full }); }
     })).catch(e => { said.textContent = e.away ? "The desk is out of reach. Connect over Bluetooth." : (e.message || String(e)); });
   };
@@ -969,10 +981,11 @@ function present(deck, slot) {
     said.textContent = "connecting to " + (device.name || "the desk");
     const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE);
     const [s, slide] = await Promise.all([service.getCharacteristic(BT_STEER), service.getCharacteristic(BT_SLIDE)]);
-    steer = s;
+    const seal = await bleSealer(service); // after: Android's Bluetooth takes one write or read at a time
+    steer = s; steerSeal = seal;
     slide.oncharacteristicvaluechanged = e => got(read(e.target.value));
     await slide.startNotifications();
-    ble = { steer: s, slide };
+    ble = { steer: s, slide, seal };
     device.ongattserverdisconnected = () => { ble = null; steer = null; said.textContent = "Bluetooth dropped. Tap Connect, or stay on the WiFi."; draw(); };
     got(read(await slide.readValue()));
     said.textContent = "";
