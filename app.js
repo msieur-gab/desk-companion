@@ -6,6 +6,8 @@
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
+import * as trust from "./trust.js";
+
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
 // a short message over everything, as symbios mobile shows them
@@ -35,10 +37,16 @@ const I = {
 // what the phone keeps (IndexedDB: db, store, all, put, drop, setting) is in db.js, shared with the service worker
 
 // ---- the desk, over the local network (plain http: it has no name the world knows) ----
-// body: JSON, or a Blob sent as it is (a file for the inbox)
+// body: JSON, or a Blob sent as it is (a file for the inbox). Over the cable the desk is always at CABLE; ping()
+// tries it when the saved address doesn't answer, so plugging in is enough (Gab, 2026-10-27: "a default 10.55.0.1
+// try could help drastically"). The saved address stays as it is, for when the phone is back on the WiFi.
+const CABLE = "10.55.0.1";
+let cable = false;
 async function desk(path, body, ms, blob) {
-  const at = await setting("desk");
+  const at = cable ? CABLE : await setting("desk");
   if (!at) throw Object.assign(new Error("no desk address yet"), { away: true });
+  // the desk keeps every route locked but a few (its /api/hello says which): once this phone owns the desk, the others go sealed
+  if (!(hello?.open || ["GET /api/hello"]).includes((body ? "POST " : "GET ") + path.split("?")[0]) && await trust.owned()) return sealedDesk(at, path, body, ms, blob);
   const stop = new AbortController(), timer = setTimeout(() => stop.abort(), ms || (body ? 45000 : 8000));
   const post = body instanceof Blob ? { method: "POST", headers: { "Content-Type": body.type || "application/octet-stream" }, body }
     : body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
@@ -51,6 +59,25 @@ async function desk(path, body, ms, blob) {
   } catch (e) {
     throw e.refused !== undefined ? e : Object.assign(new Error("the desk is out of reach"), { away: true });
   } finally { clearTimeout(timer); }
+}
+
+// the desk (its board id) that refused this phone's sessions: this phone thinks it owns it, the desk doesn't know it
+// (another phone took it over, the reset, or a lost write: 2026-10-27, the cable out right after a takeover)
+let unknownTo = null;
+async function sealedDesk(at, path, body, ms, blob) {
+  const bytes = body instanceof Blob ? new Uint8Array(await body.arrayBuffer()) : body ? new TextEncoder().encode(JSON.stringify(body)) : null;
+  let got;
+  try {
+    got = await trust.request(at, body ? "POST" : "GET", path, bytes, ms || (body ? 45000 : 8000));
+  } catch (e) {
+    if (e.status) throw Object.assign(e, { refused: e.status === 422 });
+    if (/doesn't know this phone/.test(e.message)) {
+      if (unknownTo !== hello?.board) { unknownTo = hello?.board; claimCard(); }
+      throw Object.assign(new Error("the desk doesn't know this phone any more"), { refused: false });
+    }
+    throw Object.assign(new Error("the desk is out of reach"), { away: true });
+  }
+  return blob ? new Blob([got]) : JSON.parse(new TextDecoder().decode(got) || "{}");
 }
 
 // ---- finding the desk on a new network: a page cannot list what is on the network, so it knocks
@@ -83,6 +110,14 @@ async function hunt(step) {
 
 // ---- or ask the desk itself, over Bluetooth: it says where it is, on any WiFi (desk-bluetooth) ----
 const BT_SERVICE = "d35c0001-5e5a-4d3e-9b1f-6c0de5c0de01", BT_WHERE = "d35c0002-5e5a-4d3e-9b1f-6c0de5c0de01";
+const BT_SESSION = "d35c0006-5e5a-4d3e-9b1f-6c0de5c0de01";
+// once this phone owns a desk, what it writes over Bluetooth is sealed in a session opened on connecting (the desk's
+// SECURE-LINK.md, step 4); a desk with no owner yet (or an older one, with no session value) takes it plain, as before
+async function bleSealer(service) {
+  if (!await trust.owned()) return null;
+  try { return await trust.overBluetooth(await service.getCharacteristic(BT_SESSION)); } catch { return null; }
+}
+const bleWrite = async (value, seal, text) => value.writeValueWithoutResponse(seal ? await seal.steer(text) : new TextEncoder().encode(text));
 async function askBluetooth(step) {
   const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
   step("connecting to " + (device.name || "the desk"));
@@ -94,15 +129,15 @@ async function askBluetooth(step) {
 }
 
 // give the desk a WiFi over Bluetooth: it joins while the phone stays connected, then says how it went.
-// EXPERIMENT: the desk takes this from any phone near it for now; who may is to be settled later.
+// Once the desk has an owner, it takes this only from the owner's phone, sealed.
 const BT_JOIN = "d35c0003-5e5a-4d3e-9b1f-6c0de5c0de01";
 async function joinBluetooth(ssid, password, step) {
   const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }] });
   step("connecting to " + (device.name || "the desk"));
   try {
-    const join = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_JOIN);
-    const read = async () => JSON.parse(new TextDecoder().decode(await join.readValue()));
-    await join.writeValueWithResponse(new TextEncoder().encode(JSON.stringify({ ssid, password })));
+    const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE), join = await service.getCharacteristic(BT_JOIN);
+    const read = async () => JSON.parse(new TextDecoder().decode(await join.readValue())), seal = await bleSealer(service);
+    await join.writeValueWithResponse(seal ? await seal.join({ ssid, password }) : new TextEncoder().encode(JSON.stringify({ ssid, password })));
     step("sent; the desk is trying “" + ssid + "”");
     for (let s = 0; s < 180; s += 2) { // desk-wifi waits up to a minute per try, and may try twice
       await new Promise(r => setTimeout(r, 2000));
@@ -641,9 +676,15 @@ const APPS = {
         give.onclick = () => { inside(() => APPS.settings.open()); giveWifi(); };
         list.append(give);
       }
+      list.append(kv("owner", await ownerSays()));
+      if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => askClaim(c); list.append(c); }
+      const mine = await trust.owned();
+      if (hello?.claimed && hello.board === mine?.boardId && unknownTo !== hello.board) { const w = row(I.lock, "Secret word", hello.word ? "set · change" : "not set · set it"); w.onclick = () => askWord(hello.word); list.append(w); }
+      else if (hello?.claimed && hello.word && trust.usable) { const t = row(I.lock, "Take this desk back", "over the cable"); t.onclick = () => askTakeBack(t); list.append(t); }
+      if (hello?.claimed && hello.board === (await trust.owned())?.boardId) list.append(...await openScreens());
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
-      if (at) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + at + "/", "_blank", "noopener"); list.append(go); }
+      if (at || cable) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + (cable ? CABLE : at) + "/", "_blank", "noopener"); list.append(go); }
       const standalone = matchMedia("(display-mode: standalone)").matches;
       list.append(kv("on this phone", standalone ? "installed" : offer ? "ready to install" : "in a browser tab"));
       if (offer && !standalone) { const ins = row(I.settings, "Install on this phone"); ins.onclick = async () => { offer.prompt(); await offer.userChoice; APPS.settings.open(); }; list.append(ins); }
@@ -652,6 +693,166 @@ const APPS = {
     fresh() { if (!back && !body.contains(document.activeElement)) APPS.settings.open(); }, // not over the WiFi or the trackpad, nor under a half-typed address
   },
 };
+
+// the screens let in now (Settings): a tap disconnects one, let in by mistake (Gab, 2026-10-27: "it will disconnect
+// from device you may have approved by mistake"); it is back on its lock screen within a few seconds
+async function openScreens() {
+  const got = (await desk("/api/screen/open").catch(() => null))?.screens;
+  if (!got) return [];
+  const since = t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const close = (id, what) => async () => {
+    try { await desk("/api/screen/close", { id }); toast(what + " disconnected", true); }
+    catch (e) { toast("Disconnecting: " + e.message, false); }
+    if (open === "settings") APPS.settings.open();
+  };
+  const rows = [text("div", "m-pad", got.length ? "SCREENS OPEN NOW · tap one to disconnect it" : "SCREENS OPEN NOW · none")];
+  for (const w of got) {
+    const r = row(I.lock, whereFrom(w), "since " + since(w.since) + " · disconnect");
+    r.onclick = close(w.id, "The screen");
+    rows.push(r);
+  }
+  if (got.length > 1) { const all = row(I.lock, "Disconnect every screen", "tap"); all.onclick = close("all", "Every screen"); rows.push(all); }
+  return rows;
+}
+
+// ---- the claim: the first phone over the cable becomes the desk's owner (trust.js; the desk's SECURE-LINK.md).
+// The claim makes the keys, and a sealed hello proves both sides agree; then the desk opens only to this phone ----
+let hello = null; // what the desk said last at /api/hello: { claimed, board, … }, or null when out of reach
+async function ownerSays() {
+  const mine = await trust.owned(), day = t => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (mine && hello && hello.board === unknownTo) return "the desk doesn't know this phone any more";
+  if (mine && (!hello || hello.board === mine.boardId)) return "yours since " + day(mine.since) + (hello ? "" : " (out of reach)");
+  if (hello?.claimed) return "claimed by another phone";
+  return hello ? "not claimed" : "unknown (out of reach)";
+}
+// the home's line about the claim: a desk with no owner, or, on the cable, a desk another phone owns that has a secret
+// word (a lost phone's: this one may take it back). Over the WiFi, someone else's desk stays out of the way
+async function claimCard() {
+  const card = document.getElementById("claim"), mine = await trust.owned();
+  const state = !trust.usable || !hello ? "" : hello.claimed === false ? "free"
+    : cable && hello.word && (hello.board !== mine?.boardId || unknownTo === hello.board) ? "taken" : "";
+  card.hidden = !state;
+  if (card.dataset.state === state) return;
+  card.dataset.state = state;
+  const c = state === "free" ? row(I.lock, "This desk has no owner yet", "claim it") : row(I.lock, "This desk has another owner", "yours? take it back");
+  c.onclick = () => state === "free" ? askClaim(c) : askTakeBack(c);
+  card.replaceChildren(...(state ? [c] : []));
+}
+function askTakeBack(r) {
+  ask({ title: "Take this desk back", yes: "TAKE IT BACK", no: "CANCEL",
+    says: "For a desk that was yours on a phone you lost or reset. Type its secret word: this phone becomes its owner, and the old phone is shut out. Over the USB cable only.",
+    field: { placeholder: "the secret word", check: v => v ? "" : "Type the secret word" } })
+    .answer.then(word => word && claimDesk(r, word));
+}
+// the secret word (the desk's SECURE-LINK.md, step 6): offered right after the claim, set or changed in Settings
+function askWord(change) {
+  ask({ title: change ? "Change the secret word" : "A secret word for this desk", yes: "SET", no: change ? "CANCEL" : "LATER",
+    says: "If this phone is lost, a new phone plugged into the desk by cable takes it back with this word. At least 8 characters: a few words are easy to remember. The desk keeps no copy it could show you, so write it down somewhere safe." + (change ? "" : " You can also set it later, in Settings."),
+    field: { placeholder: "the secret word", twice: true, check: v => v.length < 8 ? "At least 8 characters" : "" } })
+    .answer.then(async word => {
+      if (!word) return;
+      try { await desk("/api/trust/word", { word }); toast("Secret word set", true); }
+      catch (e) { toast("The secret word: " + e.message, false); }
+      await ping();
+      if (open === "settings") APPS.settings.open();
+    });
+}
+function askClaim(r) {
+  ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
+    says: "It becomes yours: from then on it opens only for this phone, and every screen showing it asks this phone first. The claim goes over the USB cable, with the phone's WiFi and mobile data off." })
+    .answer.then(yes => yes && claimDesk(r));
+}
+async function claimDesk(r, word) {
+  if (r.busy) return;
+  // always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on still talks
+  // to the desk over the WiFi, and the desk refuses a claim that comes that way
+  const at = CABLE, sub = r.querySelector(".sub"), was = sub.textContent;
+  let ok = false;
+  r.busy = true;
+  sub.textContent = "claiming…";
+  try {
+    if (!await knock([at], 3000)) throw new Error("the desk isn't on the cable. Plug the phone in, turn its WiFi and mobile data off, then claim again");
+    await trust.claim(at, navigator.userAgentData?.platform || "phone", word);
+    sub.textContent = "checking…";
+    const s = await trust.session(at), said = JSON.parse(new TextDecoder().decode(await s.send("POST", "/api/trust/ping")));
+    if (!said.pong) throw new Error("the desk didn't answer the check");
+    toast(word ? "This desk is yours again" : "This desk is yours", true);
+    ok = true;
+    unknownTo = null;
+  } catch (e) {
+    sub.textContent = was;
+    toast((word ? "Taking it back: " : "The claim: ") + (e.message === "wrong word" ? "that isn't its secret word" : e.message), false);
+  } finally { r.busy = false; }
+  await ping();
+  if (open === "settings") APPS.settings.open();
+  if (ok && !word) askWord(false);
+}
+
+// ---- the ask sheet: one question at a time, rising from the bottom above everything (symbios' sheet), its words in
+// the text colour (Gab, 2026-10-27: "the text is hard to read … shall we think of having a … reusable component …
+// it could also be used for pairing or claiming"). ask() gives { answer, close }: answer is true (yes), false (no), or
+// null (the sheet was dismissed, or closed because the question went away). With a field (the secret word), yes gives
+// what was typed: field = { placeholder, twice (typed twice, to catch a slip), check(value) → why it won't do, or "" } ----
+const sheet = document.getElementById("ask"), sheetScrim = document.getElementById("ask-scrim");
+let asked = Promise.resolve();
+function ask({ title, code, says, yes, no, field }) {
+  let done, end = null, gone = false;
+  const answer = new Promise(r => { done = r; });
+  asked = asked.then(() => gone ? null : new Promise(next => {
+    end = a => {
+      sheet.classList.remove("open"); sheetScrim.classList.remove("open"); sheet.setAttribute("aria-hidden", "true");
+      end = null; done(a); setTimeout(next, 260); // the next question after this one has slid away
+    };
+    const inputs = field ? [field.placeholder, ...(field.twice ? ["the same again"] : [])].map(placeholder =>
+      Object.assign(el("input", "m-input ask-field"), { type: "password", placeholder, autocomplete: "off", autocapitalize: "off", spellcheck: false })) : [];
+    const fail = text("div", "ask-fail", "");
+    const typed = () => {
+      const v = inputs[0].value, why = inputs[1] && inputs[1].value !== v ? "The two don't match" : field.check?.(v) || "";
+      if (why) fail.textContent = why;
+      else end?.(v);
+    };
+    inputs.forEach((input, i) => { input.setAttribute("aria-label", input.placeholder); input.onkeydown = e => { if (e.key === "Enter") i + 1 < inputs.length ? inputs[i + 1].focus() : typed(); }; });
+    const btn = (label, primary, a) => Object.assign(text("button", "m-btn" + (primary ? " primary" : ""), label), { type: "button", onclick: () => a && field ? typed() : end?.(a) });
+    const btns = el("div", "ask-btns");
+    btns.append(btn(no, false, false), btn(yes, true, true));
+    sheet.replaceChildren(el("div", "pane-grab"), text("div", "ask-title", title), ...(code ? [text("div", "ask-code", code)] : []), text("div", "ask-says", says), ...inputs, fail, btns);
+    if (inputs.length) setTimeout(() => inputs[0].focus(), 280);
+    sheetScrim.onclick = () => end?.(null);
+    sheet.classList.add("open"); sheetScrim.classList.add("open"); sheet.setAttribute("aria-hidden", "false");
+  }));
+  return { answer, close() { gone = true; end ? end(null) : done(null); } };
+}
+
+// ---- screens asking to open the desk (its SECURE-LINK.md, step 5): the HDMI kiosk or a laptop shows a code on a lock
+// screen; the phone asks the same code in the ask sheet, with Allow and Refuse, as soon as it sees it (each time it
+// reaches the desk: every 15 s, on opening). Dismissed, the screen stays as a line on the home; a tap asks again ----
+const WHERE_FROM = { hdmi: "the board's HDMI screen", cable: "a computer on the USB cable", wifi: "a computer on the WiFi" };
+const whereFrom = w => WHERE_FROM[w.kind] + (w.kind === "wifi" ? " (" + w.ip + ")" : "");
+const asking = new Map(); // id → the ask sheet's handle, for each screen asked about
+function askScreen(w) {
+  const q = ask({ title: "A screen wants to open the desk", code: w.code, yes: "ALLOW", no: "REFUSE",
+    says: "From " + whereFrom(w) + ". Allow it only if this is the code on that screen." });
+  asking.set(w.id, q);
+  q.answer.then(async allow => {
+    if (allow === null) return;
+    try { await desk("/api/screen/answer", { id: w.id, allow }); toast(allow ? "Screen allowed" : "Screen refused", allow); }
+    catch (e) { toast("The answer: " + e.message, false); }
+    screensCard();
+  });
+}
+async function screensCard() {
+  const box = document.getElementById("screens");
+  let waiting = [];
+  if (hello?.claimed && hello.board === (await trust.owned())?.boardId) waiting = (await desk("/api/screen/pending").catch(() => ({}))).screens || [];
+  for (const [id, q] of asking) if (!waiting.some(w => w.id === id)) { q.close(); asking.delete(id); } // answered, or the code ran out
+  for (const w of waiting) if (!asking.has(w.id)) askScreen(w);
+  box.hidden = !waiting.length;
+  box.replaceChildren(...waiting.map(w => {
+    const r = row(I.lock, "A screen wants to open the desk", "code " + w.code);
+    r.onclick = () => { asking.get(w.id)?.close(); askScreen(w); };
+    return r;
+  }));
+}
 
 // a link is removed on the second tap, so a slip of the thumb doesn't lose it
 let armed = null;
@@ -694,19 +895,23 @@ function giveWifi() {
 const BT_STEER = "d35c0004-5e5a-4d3e-9b1f-6c0de5c0de01";
 // the desk picked for the trackpad stays picked while the companion runs: back on the Remote, the phone
 // joins it again by itself, with no Bluetooth list (Android drops the link when the companion is left)
-let device = null, steer = null;
+let device = null, steer = null, steerSeal = null;
 function steerDesk(slot) {
   const said = text("div", "m-muted", "Tap Connect and pick the desk. Its screen shows the pointer.");
   const pace = text("div", "m-muted", ""); // how many sends a second the link takes: the lag, felt
   const stop = () => { device?.gatt.disconnect(); steer = null; };
-  const pad = trackpad(t => steer.writeValueWithoutResponse(new TextEncoder().encode(t)), () => !!steer,
+  const pad = trackpad(t => bleWrite(steer, steerSeal, t), () => !!steer,
     e => { said.textContent = "Bluetooth: " + e.message; stop(); go.disabled = false; });
   const rate = setInterval(() => { pace.textContent = steer ? pad.rate() + " sends a second" : ""; }, 1000);
   const join = async () => {
     go.disabled = true;
     said.textContent = "connecting to " + (device.name || "the desk");
     device.ongattserverdisconnected = () => { steer = null; go.disabled = false; said.textContent = "Disconnected. Tap Connect again."; }; // this screen's, not a closed one's
-    if (!steer || !device.gatt.connected) steer = await (await (await device.gatt.connect()).getPrimaryService(BT_SERVICE)).getCharacteristic(BT_STEER);
+    if (!steer || !device.gatt.connected) {
+      const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE);
+      steerSeal = await bleSealer(service); // a new session on each connection
+      steer = await service.getCharacteristic(BT_STEER);
+    }
     said.textContent = "Connected to " + (device.name || "the desk") + ". Drag to move, tap to click, two fingers to scroll.";
   };
   const rejoin = () => { if (device && !document.hidden) join().catch(() => { stop(); go.disabled = false; said.textContent = "The desk did not answer. Tap Connect."; }); };
@@ -897,7 +1102,7 @@ function present(deck, slot) {
   };
   const say = words => {
     (queue = queue.catch(() => {}).then(async () => {
-      if (ble) await ble.steer.writeValueWithoutResponse(new TextEncoder().encode("p " + words));
+      if (ble) await bleWrite(ble.steer, ble.seal, "p " + words);
       else { const s = await desk("/api/slides", { do: words }); got({ d: s.deck, i: s.i, n: s.n, b: s.black, f: s.full }); }
     })).catch(e => { said.textContent = e.away ? "The desk is out of reach. Connect over Bluetooth." : (e.message || String(e)); });
   };
@@ -908,10 +1113,11 @@ function present(deck, slot) {
     said.textContent = "connecting to " + (device.name || "the desk");
     const service = await (await device.gatt.connect()).getPrimaryService(BT_SERVICE);
     const [s, slide] = await Promise.all([service.getCharacteristic(BT_STEER), service.getCharacteristic(BT_SLIDE)]);
-    steer = s;
+    const seal = await bleSealer(service); // after: Android's Bluetooth takes one write or read at a time
+    steer = s; steerSeal = seal;
     slide.oncharacteristicvaluechanged = e => got(read(e.target.value));
     await slide.startNotifications();
-    ble = { steer: s, slide };
+    ble = { steer: s, slide, seal };
     device.ongattserverdisconnected = () => { ble = null; steer = null; said.textContent = "Bluetooth dropped. Tap Connect, or stay on the WiFi."; draw(); };
     got(read(await slide.readValue()));
     said.textContent = "";
@@ -1060,7 +1266,14 @@ tick(); setInterval(tick, 15000);
 let wasOnline = null;
 async function ping() {
   let online = false;
-  try { await desk("/api/status"); online = true; } catch { /* away */ }
+  for (const viaCable of cable ? [true, false] : [false, true]) { // the way that worked last, then the other
+    if (viaCable && !await knock([CABLE], 1500)) continue;
+    cable = viaCable;
+    try { hello = await desk("/api/hello"); online = true; break; } catch { /* away this way */ } // open to all: in reach, owned or not
+  }
+  if (!online) { cable = false; hello = null; }
+  claimCard();
+  screensCard();
   conn.className = "conn " + (online ? "online" : "offline");
   connLabel.textContent = online ? "desk" : "offline";
   if (online && wasOnline !== true) sync(false); // the desk came in reach: hand over, bring back

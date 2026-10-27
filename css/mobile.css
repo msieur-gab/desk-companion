@@ -316,3 +316,22 @@ canvas.avatar{display:block}
 .prof-did{font-size:11px;word-break:break-all;max-width:280px}
 .prof-edit{width:100%;max-width:280px;margin-top:4px}
 .prof-hint{line-height:1.45;max-width:300px}
+
+/* the ask sheet (app.js, ask): one question at a time, symbios' bottom sheet above everything, its words in the
+   text colour (the muted one was too faint on the phone: Gab, 2026-10-27) */
+#ask{position:fixed;inset:auto 0 0 0;z-index:120;background:var(--bg);max-height:88vh;overflow:auto;
+  border-radius:18px 18px 0 0;border:1px solid var(--panel-border);border-bottom:0;
+  box-shadow:0 -8px 30px -12px color-mix(in srgb, var(--fg) 45%, transparent);
+  transform:translateY(100%);transition:transform .26s cubic-bezier(.4,0,.2,1);
+  padding:0 calc(18px + env(safe-area-inset-right)) calc(22px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left))}
+#ask.open{transform:translateY(0)}
+#ask .pane-grab{display:block;width:40px;height:4px;border-radius:2px;background:var(--panel-border);margin:8px auto 14px}
+#ask-scrim{position:fixed;inset:0;z-index:119;background:#000;opacity:0;pointer-events:none;transition:opacity .26s}
+#ask-scrim.open{opacity:.55;pointer-events:auto}
+.ask-title{color:var(--fg);font-size:17px;font-weight:600}
+.ask-code{color:var(--accent);font-size:46px;letter-spacing:.25em;text-align:center;margin:18px 0 6px}
+.ask-says{color:var(--fg);font-size:14px;line-height:1.5;margin:12px 0 20px}
+.ask-field{display:block;width:100%;box-sizing:border-box;margin:0 0 10px}
+.ask-fail{color:var(--fg);font-size:13px;min-height:1.4em;margin:0 0 10px}
+.ask-btns{display:flex;gap:10px}
+.ask-btns .m-btn{flex:1;padding-top:12px;padding-bottom:12px}
