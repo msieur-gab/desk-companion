@@ -2,8 +2,8 @@
 // when there is one; the kept copy answers when there is none. The articles are not here: they
 // live in the phone's database (see app.js).
 importScripts("db.js"); // what the phone keeps: the files shared from other apps go there
-const KEPT = "desk-companion-38";
-const SHELL = ["./", "app.js", "css/fonts.css", "css/theme.css", "css/mobile.css", "marked.min.js", "db.js", "trust.js", "fonts/DepartureMono-Regular.woff2", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
+const KEPT = "desk-companion-39";
+const SHELL = ["./", "app.js", "css/fonts.css", "css/theme.css", "css/mobile.css", "marked.min.js", "db.js", "trust.js", "notes.js", "fonts/DepartureMono-Regular.woff2", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => e.waitUntil(caches.open(KEPT).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener("activate", e => e.waitUntil(

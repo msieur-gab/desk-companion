@@ -1,12 +1,13 @@
 // The desk's companion on the phone. The look is symbios's mobile shell (status bar, springboard,
-// panes sliding in; css/mobile.css unchanged); the code is its own and small. Seven apps: Reader (articles kept on this
+// panes sliding in; css/mobile.css unchanged); the code is its own and small. The apps: Reader (articles kept on this
 // phone, readable with no network), Shared (links and files shared to it, waiting for the desk), Memos (voice notes
 // recorded here; the ones kept go to the desk's inbox, which writes their text), Monitor
-// (how the desk is doing), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
+// (how the desk is doing), Notes (written here in Markdown, sent to the desk's ~/Notes; notes.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
 import * as trust from "./trust.js";
+import { notesApp, sendNotes } from "./notes.js";
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
@@ -178,6 +179,7 @@ async function sync(loud, quiet) {
         await put("memos", { ...m, keep: false, why: e.message }); // too large, refused: it stays here, with the reason
       }
     }
+    const wrote = await sendNotes(desk); // the notes sent to the desk (notes.js)
     // files shared from other apps go to the desk's inbox, which decides where they go (a deck with its notes
     // pages → Slides, any other PDF → Documents…, ~/Inbox/rules.md); once there, they leave the phone
     let handed = 0, making = 0, there = 0;
@@ -201,7 +203,7 @@ async function sync(loud, quiet) {
     }
     const decks = await syncDecks();
     await put("settings", Date.now(), "synced");
-    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent",
+    const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent", wrote && wrote + " note" + (wrote > 1 ? "s" : "") + " sent",
       handed && handed + " file" + (handed > 1 ? "s" : "") + " handed over" + (making ? " (" + (making > 1 ? making + " decks" : "a deck") + " being made)" : ""),
       there && there + " file" + (there > 1 ? "s were" : " was") + " already on the desk", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
       decks && decks + " deck" + (decks > 1 ? "s" : "")].filter(Boolean);
@@ -484,6 +486,9 @@ const APPS = {
       body.replaceChildren(box);
     },
   },
+  // notes: a module of its own (notes.js), on the shell's pane, toasts and sync
+  notes: notesApp({ el, text, toast, row, note, body, title, inside, top: () => { back = null; }, showing: id => open === id && !back,
+    onLeave: fn => { teardown = fn; }, sync, badges: () => badges(), online: () => wasOnline }),
   status: {
     name: "Monitor", glyph: I.status,
     open() {
@@ -1245,7 +1250,7 @@ function confirmRemove(r, key) {
 // ---- springboard + dock ----
 function tile(id) {
   const b = el("button", "app-tile"), glyph = el("span", "glyph", APPS[id].glyph);
-  if (id === "share" || id === "memos") { const n = Object.assign(el("span", "tile-badge"), { hidden: true }); n.dataset.app = id; glyph.append(n); }
+  if (id === "share" || id === "memos" || id === "notes") { const n = Object.assign(el("span", "tile-badge"), { hidden: true }); n.dataset.app = id; glyph.append(n); }
   b.append(glyph, text("span", "label", APPS[id].name));
   b.onclick = () => openApp(id);
   return b;
@@ -1255,7 +1260,8 @@ for (const id of Object.keys(APPS).filter(id => !APPS[id].needs || APPS[id].need
   if (APPS[id].dock !== false) document.getElementById("dock-tiles").append(tile(id));
 }
 async function badges() {
-  const n = { share: (await all("waiting")).length + (await all("files")).length, memos: (await all("memos")).filter(m => m.keep).length }; // links and files waiting, memos kept for the desk
+  const n = { share: (await all("waiting")).length + (await all("files")).length, memos: (await all("memos")).filter(m => m.keep).length,
+    notes: (await all("notes")).filter(n => n.keep).length }; // links and files waiting, memos and notes kept for the desk
   for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n[b.dataset.app]; b.textContent = n[b.dataset.app]; }
 }
 

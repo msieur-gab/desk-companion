@@ -1,8 +1,8 @@
 // What the phone keeps (IndexedDB): articles, waiting links, files shared to the desk, decks (previews and
-// notes), voice memos, and a few settings. Opened by the page (app.js) and by the service worker (sw.js),
+// notes), voice memos, notes written here, and a few settings. Opened by the page (app.js) and by the service worker (sw.js),
 // which catches the files shared from other apps: the two must agree on the stores, so they live here once.
 const db = new Promise((ok, no) => {
-  const r = indexedDB.open("desk", 4);
+  const r = indexedDB.open("desk", 5);
   r.onupgradeneeded = () => {
     const have = r.result.objectStoreNames, make = (name, how) => have.contains(name) || r.result.createObjectStore(name, how);
     make("articles", { keyPath: "file" });
@@ -11,6 +11,7 @@ const db = new Promise((ok, no) => {
     make("decks", { keyPath: "name" });
     make("memos", { keyPath: "at" }); // { at: when it began (ms), seconds, blob, keep: for the desk, why: refused by it }
     make("files", { keyPath: "id" }); // { id, name, type, size, modified (ms), blob, at: when shared, why: refused by the desk }
+    make("notes", { keyPath: "at" }); // { at: when begun (ms), edited (ms), text (markdown), keep: for the desk, why: refused by it }
   };
   r.onsuccess = () => {
     r.result.onversionchange = () => r.result.close(); // a newer companion opened it: let it upgrade
