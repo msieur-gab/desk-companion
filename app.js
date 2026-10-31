@@ -2,12 +2,12 @@
 // panes sliding in; css/mobile.css unchanged); the code is its own and small. The apps: Reader (articles kept on this
 // phone, readable with no network), Shared (links and files shared to it, waiting for the desk), Memos (voice notes
 // recorded here; the ones kept go to the desk's inbox, which writes their text), Monitor
-// (how the desk is doing), Notes (written here in Markdown, sent to the desk's ~/Notes; notes.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
+// (how the desk is doing), Notes (the desk's ~/Notes, kept here to read and write; notes.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
 import * as trust from "./trust.js";
-import { notesApp, sendNotes } from "./notes.js";
+import { notesApp, syncNotes } from "./notes.js";
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
@@ -179,7 +179,7 @@ async function sync(loud, quiet) {
         await put("memos", { ...m, keep: false, why: e.message }); // too large, refused: it stays here, with the reason
       }
     }
-    const wrote = await sendNotes(desk); // the notes sent to the desk (notes.js)
+    const { sent: wrote, copies } = await syncNotes(desk); // the notes sent to the desk, and those changed there brought back (notes.js)
     // files shared from other apps go to the desk's inbox, which decides where they go (a deck with its notes
     // pages → Slides, any other PDF → Documents…, ~/Inbox/rules.md); once there, they leave the phone
     let handed = 0, making = 0, there = 0;
@@ -204,6 +204,7 @@ async function sync(loud, quiet) {
     const decks = await syncDecks();
     await put("settings", Date.now(), "synced");
     const bits = [sent && sent + " link" + (sent > 1 ? "s" : "") + " handed over", heard && heard + " memo" + (heard > 1 ? "s" : "") + " sent", wrote && wrote + " note" + (wrote > 1 ? "s" : "") + " sent",
+      copies && copies + " note" + (copies > 1 ? "s" : "") + " changed on the desk too: yours kept beside " + (copies > 1 ? "them" : "it") + " as “(phone)”",
       handed && handed + " file" + (handed > 1 ? "s" : "") + " handed over" + (making ? " (" + (making > 1 ? making + " decks" : "a deck") + " being made)" : ""),
       there && there + " file" + (there > 1 ? "s were" : " was") + " already on the desk", fresh.length && fresh.length + " new article" + (fresh.length > 1 ? "s" : ""),
       decks && decks + " deck" + (decks > 1 ? "s" : "")].filter(Boolean);
@@ -231,7 +232,7 @@ async function follow() { // started at the end, once wasOnline exists
       deskSkew = Date.now() / 1000 - d.now;
       deskTasks = d.tasks;
       APPS.status.activity?.();
-      if (seq !== -1 && (d.missed || d.changes.some(c => /^(Articles|Slides)(\/|$)/.test(c.folder)))) sync(false, true);
+      if (seq !== -1 && (d.missed || d.changes.some(c => /^(Articles|Slides|Notes)(\/|$)/.test(c.folder)))) sync(false, true);
       seq = d.seq; boot = d.boot;
     } catch { await new Promise(r => setTimeout(r, 3000)); }
   }
