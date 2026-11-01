@@ -35,6 +35,7 @@
 
 /* light paper (default lives in :root above) */
 
+[data-theme="paper"]    { --bg:#ffffff; --fg:#161616; --accent:#161616; } /* :root's, named, so its swatch shows it */
 [data-theme="ink"]      { --bg:#0d0d0d; --fg:#e8e8e8; --accent:#e8e8e8; }
 [data-theme="phosphor"] { --bg:#001a0d; --fg:#3bff88; --accent:#3bff88; }
 [data-theme="amber"]    { --bg:#0c0900; --fg:#ffb000; --accent:#ffb000; }

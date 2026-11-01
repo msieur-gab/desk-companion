@@ -10,6 +10,8 @@
 import * as trust from "./trust.js";
 import { notesApp, syncNotes } from "./notes.js";
 import { playerApp } from "./player.js";
+import { themePicker, setTheme, current as themeNow } from "./utils/theme.js";
+setTheme(themeNow()); // the phone's bar above the page in the theme chosen (index.html set the page's before it drew)
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
@@ -710,7 +712,9 @@ const APPS = {
       const standalone = matchMedia("(display-mode: standalone)").matches;
       list.append(kv("on this phone", standalone ? "installed" : offer ? "ready to install" : "in a browser tab"));
       if (offer && !standalone) { const ins = row(I.settings, "Install on this phone"); ins.onclick = async () => { offer.prompt(); await offer.userChoice; APPS.settings.open(); }; list.append(ins); }
-      body.replaceChildren(where, list, note(at ? "The address changes with the network. At home it is the desk's name on the router; elsewhere, the address its WiFi screen shows." : "Type the address the desk has on this network."));
+      const look = el("div", "m-pad");
+      look.append(text("div", "m-muted", "LOOK"), themePicker(() => APPS.settings.open())); // the companion's colours (utils/theme.js)
+      body.replaceChildren(where, list, look, note(at ? "The address changes with the network. At home it is the desk's name on the router; elsewhere, the address its WiFi screen shows." : "Type the address the desk has on this network."));
     },
     fresh() { if (!back && !body.contains(document.activeElement)) APPS.settings.open(); }, // not over the WiFi or the trackpad, nor under a half-typed address
   },
