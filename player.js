@@ -25,6 +25,27 @@ const isMemo = path => /^Memos\/[^/]+$/.test(path); // a folder right inside Mem
 const audio = new Audio();
 audio.preload = "auto";
 const state = { queue: [], idx: -1, url: null, coverUrl: null, blob: null, cover: null, fetching: null, token: 0 };
+// The silence beside the sound. Between two tracks (and here while the next one comes from the desk) Chrome on Android
+// sees its media stop, drops its media foreground service and isn't allowed it back in the background: about a minute
+// later Android freezes it, sound and all. A looping silence that plays the whole time the sound does keeps it.
+// Learned on Pebbble, Gab's Pixel, 28 Oct (brain: knowledge/pwa/android-background-audio-freeze-between-tracks.md).
+// The silence is made here at the phone's own rate (48 kHz stereo): the first player's format sets Chrome's output.
+let hush = null;
+const awake = {
+  on() {
+    if (!hush) {
+      const n = 48000 * 2 * 10, wav = new Uint8Array(44 + n).fill(128), v = new DataView(wav.buffer); // 10 s, 8 bit, 128 = silence
+      const put = (at, text) => [...text].forEach((c, i) => wav[at + i] = c.charCodeAt(0));
+      put(0, "RIFF"); v.setUint32(4, 36 + n, true); put(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+      v.setUint16(22, 2, true); v.setUint32(24, 48000, true); v.setUint32(28, 96000, true); v.setUint16(32, 2, true);
+      v.setUint16(34, 8, true); put(36, "data"); v.setUint32(40, n, true);
+      hush = new Audio(URL.createObjectURL(new Blob([wav], { type: "audio/wav" })));
+      hush.loop = true;
+    }
+    hush.play().catch(() => {});
+  },
+  off() { hush?.pause(); },
+};
 const ahead = new Map(); // path → Blob: the next track, fetched while this one plays (two at most)
 const covers = new Map(); // folder → Blob or null, asked once a session
 
@@ -87,12 +108,15 @@ export function playerApp(s) {
     const token = ++state.token;
     state.idx = i;
     state.fetching = t.path;
+    state.switching = true; // the old sound stops, the new one hasn't started: the silence carries on meanwhile
+    awake.on();
     paint();
     let blob;
     try { blob = await sound(t); }
     catch (e) {
       if (token !== state.token) return;
-      state.fetching = null;
+      state.fetching = state.switching = null;
+      awake.off();
       paint();
       return s.toast(e.away ? "The desk is out of reach: what is kept on this phone still plays." : e.message, false);
     }
@@ -104,7 +128,7 @@ export function playerApp(s) {
     audio.src = state.url;
     const at = await setting("pos:" + t.path);
     if (at) audio.addEventListener("loadedmetadata", () => { if (audio.duration > LONG && at < audio.duration - 5) audio.currentTime = at; }, { once: true });
-    audio.play().catch(() => {});
+    audio.play().catch(() => { awake.off(); }).finally(() => { if (token === state.token) state.switching = false; });
     state.cover = t.cover !== undefined ? t.cover : await coverOf(t.folder);
     if (token !== state.token) return;
     if (state.coverUrl) URL.revokeObjectURL(state.coverUrl);
@@ -127,9 +151,10 @@ export function playerApp(s) {
     const done = audio.currentTime > audio.duration - 30;
     put("settings", done ? 0 : Math.floor(audio.currentTime), "pos:" + t.path);
   };
-  audio.addEventListener("pause", remember);
+  audio.addEventListener("pause", () => { remember(); if (!audio.ended && !state.switching) awake.off(); }); // a real pause: the silence too
+  audio.addEventListener("play", () => awake.on());
   audio.addEventListener("timeupdate", () => { if (Date.now() - lastSaved > 15000) remember(); tick(); });
-  audio.addEventListener("ended", () => { remember(); if (state.idx < state.queue.length - 1) next(); else paint(); });
+  audio.addEventListener("ended", () => { remember(); if (state.idx < state.queue.length - 1) next(); else { awake.off(); paint(); } });
   for (const e of ["play", "pause", "loadedmetadata"]) audio.addEventListener(e, () => paint());
 
   // the lock screen, a headset's buttons
