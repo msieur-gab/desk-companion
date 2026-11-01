@@ -85,6 +85,9 @@ export async function session(at) {
   // a sealed request over the network, bound to its method and full path (?name= and all); its answer comes sealed.
   // A refusal comes plain, as { error }, with its status on the error thrown
   const send = async (method, path, bytes, ms) => {
+    // the path as the browser will send it, so the desk opens what was sealed: a URL's query turns ' into %27 on the way
+    // out, and a name with an apostrophe was refused (Gab, 2026-11-01: "the apostrophe in the title might be the problem")
+    path = new URL(path, "http://desk").href.slice("http://desk".length);
     const route = method + " " + path, { n: m, sealed } = await seal(route, bytes || new Uint8Array());
     // a GET can't carry a body: its seal (no text, the proof alone) goes as X-Seal
     const get = method === "GET", r = await fetch("http://" + at + path, { method, signal: ms ? AbortSignal.timeout(ms) : undefined,
