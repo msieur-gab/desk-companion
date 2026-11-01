@@ -2,12 +2,14 @@
 // panes sliding in; css/mobile.css unchanged); the code is its own and small. The apps: Reader (articles kept on this
 // phone, readable with no network), Shared (links and files shared to it, waiting for the desk), Memos (voice notes
 // recorded here; the ones kept go to the desk's inbox, which writes their text), Monitor
-// (how the desk is doing), Notes (the desk's ~/Notes, kept here to read and write; notes.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
+// (how the desk is doing), Notes (the desk's ~/Notes, kept here to read and write; notes.js), Player (the desk's Music, Voice
+// memos and Podcasts played on the phone, kept here for away; player.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
 import * as trust from "./trust.js";
 import { notesApp, syncNotes } from "./notes.js";
+import { playerApp } from "./player.js";
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
@@ -318,6 +320,21 @@ const row = (icon, name, sub) => {
 };
 const note = t => text("div", "m-pad m-muted", t);
 
+// ---- the modules: an app in a file of its own, given the shell (Gab, 2026-11-01: "each companion app should be built
+// as modules or additional self contained code to extend companion capabilities"). A module exports a function that
+// takes the shell and returns an app { name, glyph, dock, open(), fresh() }; adding one is a line here, a line in
+// sw.js (kept offline) and, if it keeps things, a store in db.js. The other apps move out one at a time, later.
+const MODULES = { notes: notesApp, player: playerApp };
+function modules() {
+  const shell = {
+    el, text, toast, row, note, body, title, inside, top: () => { back = null; },
+    showing: id => open === id && !back, // open, on its first screen
+    opened: id => open === id, // open, on any of its screens
+    onLeave: fn => { teardown = fn; }, desk, sync, badges: () => badges(), online: () => wasOnline,
+  };
+  return Object.fromEntries(Object.entries(MODULES).map(([id, make]) => [id, make(shell)]));
+}
+
 // ---- the apps ----
 const APPS = {
   reader: {
@@ -487,9 +504,8 @@ const APPS = {
       body.replaceChildren(box);
     },
   },
-  // notes: a module of its own (notes.js), on the shell's pane, toasts and sync
-  notes: notesApp({ el, text, toast, row, note, body, title, inside, top: () => { back = null; }, showing: id => open === id && !back,
-    onLeave: fn => { teardown = fn; }, sync, badges: () => badges(), online: () => wasOnline }),
+  // the modules (MODULES, below): each a file of its own, on the shell's pane, toasts, desk and sync
+  ...modules(),
   status: {
     name: "Monitor", glyph: I.status,
     open() {
