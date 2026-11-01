@@ -335,3 +335,35 @@ canvas.avatar{display:block}
 .ask-fail{color:var(--fg);font-size:13px;min-height:1.4em;margin:0 0 10px}
 .ask-btns{display:flex;gap:10px}
 .ask-btns .m-btn{flex:1;padding-top:12px;padding-bottom:12px}
+
+/* files: how the kinds show (utils/files.js): covers in a grid, lines in a list, a phone where a file is kept */
+.f-scroll{flex:1;min-height:0;overflow:auto;padding-bottom:8px}
+.f-tabs{padding:12px 12px 6px;flex:none;gap:8px}
+.f-tabs .m-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:8px}
+.f-tabs svg{width:16px;height:16px;flex:none}
+.f-head{padding:16px 16px 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+.f-path{padding:4px 16px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:16px 12px;padding:10px 14px}
+.f-tile{all:unset;cursor:pointer;min-width:0;display:block}
+.f-tile:active .f-cover{border-color:var(--accent)}
+.f-cover{position:relative;aspect-ratio:1;border:1px solid var(--hair);background:var(--hair) center/cover no-repeat;
+  display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.f-cover>svg{width:34%;height:34%}
+.f-cover.has>svg{display:none}
+.f-name{margin-top:7px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f-sub{font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f-mark{display:inline-flex;width:16px;height:16px;flex:none;color:var(--accent)}
+.f-mark:empty{display:none}
+.f-mark svg{width:100%;height:100%}
+.f-cover .f-mark{position:absolute;right:6px;bottom:6px;width:20px;height:20px;padding:2px;background:var(--bg);border-radius:4px}
+.f-line .m-nm{display:flex;flex-direction:column;gap:3px}
+.f-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.f-text{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.f-line.playing .f-title{color:var(--accent)}
+.f-x{margin:-10px -6px -10px 4px;padding:10px 14px;font-size:20px}
+.f-foot{flex:none;padding:8px 12px;gap:8px}
+.f-foot .m-btn{flex:1}
+.m-cover svg{width:60%;height:60%;margin:20%;color:var(--muted)}
+.f-header{display:flex;gap:14px;align-items:flex-end;padding:12px 16px 10px}
+.f-header .f-cover{width:96px;flex:none}
+.f-hname{font-size:17px;line-height:1.25;margin-bottom:4px}
