@@ -367,3 +367,12 @@ canvas.avatar{display:block}
 .f-header{display:flex;gap:14px;align-items:flex-end;padding:12px 16px 10px}
 .f-header .f-cover{width:96px;flex:none}
 .f-hname{font-size:17px;line-height:1.25;margin-bottom:4px}
+/* covers in the theme's colours: a duotone made of --bg and --accent only (utils/files.js, paintCover). The picture in
+   grey is blended onto --accent, then --bg is laid over it: on a dark theme its darks become --bg and its lights --accent
+   (multiply, lighten); on a light theme the other way round (screen, darken). A new theme says which it is, nothing else. */
+:root{--cover-ink:screen;--cover-paper:darken}
+[data-theme="ink"],[data-theme="phosphor"],[data-theme="amber"],[data-theme="slate"]{--cover-ink:multiply;--cover-paper:lighten}
+.f-cover.has,.m-cover.has{position:relative;overflow:hidden;isolation:isolate;background:var(--accent)}
+.duo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:grayscale(1) contrast(1.15);mix-blend-mode:var(--cover-ink)}
+.f-cover.has::after,.m-cover.has::after{content:"";position:absolute;inset:0;background:var(--bg);mix-blend-mode:var(--cover-paper);pointer-events:none}
+.f-cover.has .f-mark{z-index:1}

@@ -47,6 +47,16 @@ export const coverIn = items => {
   return (["cover", "folder", "front", "albumart", "album"].map(n => pics.find(p => p.name.toLowerCase() === n)).find(Boolean) || pics[0])?.path || null;
 };
 
+// a cover in the theme's colours (Gab, 2026-11-01: "album covers should inherit from a filter that turn the image green like
+// the theme … by using the theme variable"): the picture in grey, its darks taken to --bg and its lights to --accent by
+// css/mobile.css (.duo), so another theme (slate) recolours every cover with no code. picture: a Blob or a URL.
+export function paintCover(el, picture) {
+  if (!picture) return;
+  const img = Object.assign(document.createElement("img"), { className: "duo", alt: "", src: typeof picture === "string" ? picture : URL.createObjectURL(picture) });
+  el.prepend(img);
+  el.classList.add("has");
+}
+
 // the desk: a folder's items, a file's bytes (sealed whole once the phone owns the desk: SECURE-LINK.md, known limits)
 export const items = async (desk, path) => (await desk("/api/files?path=" + encodeURIComponent(path))).items;
 export async function fetchFile(desk, path, bytes) {

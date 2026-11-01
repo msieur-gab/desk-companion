@@ -179,7 +179,7 @@ export function playerApp(s) {
       if (t.here) cover.append(mark(true));
       tile.append(cover, s.text("div", "f-name", t.name), s.text("div", "f-sub m-muted", t.sub || ""));
       tile.onclick = t.open;
-      const show = b => { if (b) { cover.style.backgroundImage = `url("${URL.createObjectURL(b)}")`; cover.classList.add("has"); } };
+      const show = b => F.paintCover(cover, b);
       if (t.blob) show(t.blob); else if (t.picture) picture(t.picture).then(show);
       g.append(tile);
     }
@@ -206,7 +206,7 @@ export function playerApp(s) {
     const h = s.el("div", "f-header"), cover = s.el("div", "f-cover", glyph || ICONS.album), words = s.el("div");
     words.append(s.text("div", "f-hname", name), s.text("div", "f-sub m-muted", sub || ""));
     h.append(cover, words);
-    const show = b => { if (b) { cover.style.backgroundImage = `url("${URL.createObjectURL(b)}")`; cover.classList.add("has"); } };
+    const show = b => F.paintCover(cover, b);
     if (blob) show(blob); else if (pic) picture(pic).then(show);
     return h;
   }
@@ -222,7 +222,6 @@ export function playerApp(s) {
     const scroll = s.el("div", "m-list f-scroll");
     scroll.append(...content);
     const bar = s.el("div", "m-nowbar"), cover = s.el("div", "m-cover"), meta = s.el("div", "m-nowmeta"), now = s.text("div", "m-nowtitle", "");
-    cover.style.cssText = "background-size:cover;background-position:center";
     const ctrls = s.el("div", "m-nowctrls"), seek = s.el("div"), seekLine = s.el("div", "m-seek"), fill = s.el("i"), time = s.text("span", "m-time", "");
     seekLine.append(fill);
     seek.append(seekLine);
@@ -251,8 +250,12 @@ export function playerApp(s) {
     ui.bar.style.display = t ? "" : "none";
     ui.now.textContent = !t ? "" : state.fetching === t.path ? "Fetching " + t.name + "…" : t.name;
     ui.play.textContent = audio.src && !audio.paused ? "||" : ">";
-    ui.cover.style.backgroundImage = state.coverUrl ? `url("${state.coverUrl}")` : "";
-    ui.cover.innerHTML = state.coverUrl || !t ? "" : ICONS[t.kind] || ICONS.track;
+    if (ui.cover.dataset.url !== (state.coverUrl || "")) { // the playing one's cover, in the theme's colours
+      ui.cover.dataset.url = state.coverUrl || "";
+      ui.cover.replaceChildren();
+      ui.cover.classList.remove("has");
+      if (state.coverUrl) F.paintCover(ui.cover, state.coverUrl); else if (t) ui.cover.innerHTML = ICONS[t.kind] || ICONS.track;
+    }
     for (const r of s.body.querySelectorAll(".f-line[data-path]")) r.classList.toggle("playing", !!t && r.dataset.path === t.path);
     tick();
   }
