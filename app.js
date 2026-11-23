@@ -272,6 +272,33 @@ async function syncDecks() {
 let offer = null;
 addEventListener("beforeinstallprompt", e => { e.preventDefault(); offer = e; });
 addEventListener("appinstalled", () => { offer = null; toast("Installed on this phone", true); });
+// only Chromium browsers let a page open their install dialog (beforeinstallprompt); the others are told where it is
+// in their menu (Gab, 2026-11-23: "not every browser lets you also add the app as a progressive web app")
+const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const installed = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+function howToInstall() {
+  const ua = navigator.userAgent;
+  if (ios) return "Tap Share (the square with an arrow), then “Add to Home Screen”.";
+  if (/Firefox/.test(ua)) return "Open the browser's menu (⋮) and choose “Install” or “Add to Home screen”.";
+  if (/SamsungBrowser/.test(ua)) return "Open the browser's menu (☰) and choose “Add page to”, then “Home screen”.";
+  if (/Chrome|Chromium/.test(ua)) return "Open the browser's menu (⋮) and choose “Install app” or “Add to Home screen”.";
+  return "If this browser's menu has “Install” or “Add to Home screen”, use it. If it has neither, open this page in Chrome or Firefox to install it; meanwhile the companion works in this tab.";
+}
+// true once installed from here. claiming: the companion was opened by a desk's QR code. On an iPhone the app on the
+// home screen keeps its own storage, apart from Safari's: it claims there, with the code typed
+async function installSheet(claiming) {
+  if (installed()) return true;
+  if (!offer) await new Promise(r => setTimeout(r, 2500)); // the browser says it can install a moment after the page opens
+  const then = ios && claiming ? " Then open it from your home screen and type the code shown under the desk's QR code: on an iPhone the installed companion starts apart from this tab." : "";
+  const says = "Then it opens like an app, from your home screen." + then;
+  if (offer && !installed()) {
+    if (!await ask({ title: "Install the companion", yes: "INSTALL", no: "NOT NOW", says }).answer) return false;
+    offer.prompt();
+    return (await offer.userChoice).outcome === "accepted";
+  }
+  await ask({ title: "Install the companion", yes: "OK", no: "NOT NOW", says: howToInstall() + " " + says }).answer;
+  return false;
+}
 
 // ---- the Assistant's conversation: kept while the companion is open, as on the desk; reading shortcuts only ----
 const talkLog = [];
@@ -701,7 +728,7 @@ const APPS = {
         list.append(give);
       }
       list.append(kv("owner", await ownerSays()));
-      if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", "over the cable"); c.onclick = () => askClaim(c); list.append(c); }
+      if (hello?.claimed === false && trust.usable) { const c = row(I.lock, "Claim this desk", cable ? "over the cable" : "with the code on its screen"); c.onclick = () => askClaim(c); list.append(c); }
       const mine = await trust.owned();
       if (hello?.claimed && hello.board === mine?.boardId && unknownTo !== hello.board) { const w = row(I.lock, "Secret word", hello.word ? "set · change" : "not set · set it"); w.onclick = () => askWord(hello.word); list.append(w); }
       else if (hello?.claimed && hello.word && trust.usable) { const t = row(I.lock, "Take this desk back", "over the cable"); t.onclick = () => askTakeBack(t); list.append(t); }
@@ -709,9 +736,9 @@ const APPS = {
       list.append(kv("last synced", synced ? new Date(synced).toLocaleString() : "never"));
       const now = row(I.share, "Sync with the desk now"); now.onclick = () => sync(true); list.append(now);
       if (at || cable) { const go = row(I.globe, "Open the desk itself"); go.onclick = () => window.open("http://" + (cable ? CABLE : at) + "/", "_blank", "noopener"); list.append(go); }
-      const standalone = matchMedia("(display-mode: standalone)").matches;
+      const standalone = installed();
       list.append(kv("on this phone", standalone ? "installed" : offer ? "ready to install" : "in a browser tab"));
-      if (offer && !standalone) { const ins = row(I.settings, "Install on this phone"); ins.onclick = async () => { offer.prompt(); await offer.userChoice; APPS.settings.open(); }; list.append(ins); }
+      if (!standalone) { const ins = row(I.settings, "Install on this phone"); ins.onclick = async () => { await installSheet(false); if (open === "settings") APPS.settings.open(); }; list.append(ins); }
       const look = el("div", "m-pad");
       look.append(text("div", "m-muted", "LOOK"), themePicker(() => APPS.settings.open())); // the companion's colours (utils/theme.js)
       body.replaceChildren(where, list, look, note(at ? "The address changes with the network. At home it is the desk's name on the router; elsewhere, the address its WiFi screen shows." : "Type the address the desk has on this network."));
@@ -783,22 +810,42 @@ function askWord(change) {
       if (open === "settings") APPS.settings.open();
     });
 }
-function askClaim(r) {
-  ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
-    says: "It becomes yours: from then on it opens only for this phone, and every screen showing it asks this phone first. The claim goes over the USB cable, with the phone's WiFi and mobile data off." })
-    .answer.then(yes => yes && claimDesk(r));
+// the code a desk's QR code brought (#claim=…&desk=…&board=…), kept a few minutes: { code, desk, board, until }
+async function broughtCode() {
+  const got = await setting("claim-code");
+  return got && got.until > Date.now() ? got : null;
 }
-async function claimDesk(r, word) {
+const codeShown = c => c.slice(0, 4) + "-" + c.slice(4);
+const YOURS = "It becomes yours: from then on it opens only for this phone, and every screen showing it asks this phone first.";
+async function askClaim(r) {
+  const brought = await broughtCode();
+  if (brought) return ask({ title: "Claim this desk", code: codeShown(brought.code), yes: "CLAIM", no: "CANCEL",
+    says: YOURS + " The code is the one under the QR code on the desk's screen." })
+    .answer.then(yes => yes && claimDesk(r, null, brought.code, brought.desk));
+  if (cable) return ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
+    says: YOURS + " The claim goes over the USB cable, with the phone's WiFi and mobile data off." })
+    .answer.then(yes => yes && claimDesk(r));
+  ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
+    says: YOURS + " Type the code shown under the QR code on the desk's screen (the board's own, or a computer on its USB cable).",
+    field: { placeholder: "the code, as ABCD-EFGH", type: "text", check: v => v.replace(/[^a-z0-9]/gi, "").length === 8 ? "" : "8 letters and digits" } })
+    .answer.then(async typed => typed && claimDesk(r, null, typed, cable ? CABLE : await setting("desk")));
+}
+// code, where: the code a near screen showed, and the desk's address on the WiFi; without them, over the cable
+async function claimDesk(r, word, code, where) {
+  r ||= document.querySelector("#claim > *") || el("div"); // from the QR link, before the home's line is drawn
   if (r.busy) return;
-  // always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on still talks
-  // to the desk over the WiFi, and the desk refuses a claim that comes that way
-  const at = CABLE, sub = r.querySelector(".sub"), was = sub.textContent;
+  // without a code always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on
+  // still talks to the desk over the WiFi, and the desk refuses a claim that comes that way without the code
+  const at = code ? where : CABLE, sub = r.querySelector(".sub") || {}, was = sub.textContent;
   let ok = false;
   r.busy = true;
   sub.textContent = "claiming…";
   try {
-    if (!await knock([at], 3000)) throw new Error("the desk isn't on the cable. Plug the phone in, turn its WiFi and mobile data off, then claim again");
-    await trust.claim(at, navigator.userAgentData?.platform || "phone", word);
+    if (code && !at) throw new Error("this phone doesn't know where the desk is yet: find it in Settings first");
+    if (!await knock([at], code ? 5000 : 3000)) throw new Error(code ? "the desk doesn't answer at " + at + ". Is this phone on the same WiFi as the desk?"
+      : "the desk isn't on the cable. Plug the phone in, turn its WiFi and mobile data off, then claim again");
+    await trust.claim(at, navigator.userAgentData?.platform || "phone", word, code && code.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+    if (code) { await drop("settings", "claim-code"); await put("settings", at, "desk"); }
     sub.textContent = "checking…";
     const s = await trust.session(at), said = JSON.parse(new TextDecoder().decode(await s.send("POST", "/api/trust/ping")));
     if (!said.pong) throw new Error("the desk didn't answer the check");
@@ -807,7 +854,9 @@ async function claimDesk(r, word) {
     unknownTo = null;
   } catch (e) {
     sub.textContent = was;
-    toast((word ? "Taking it back: " : "The claim: ") + (e.message === "wrong word" ? "that isn't its secret word" : e.message), false);
+    if (e.message === "wrong code") await drop("settings", "claim-code"); // a new code is needed: scan the desk's QR code again
+    toast((word ? "Taking it back: " : "The claim: ") + (e.message === "wrong word" ? "that isn't its secret word"
+      : e.message === "wrong code" ? "that isn't the code on the desk's screen (it changes every few minutes): scan it again" : e.message), false);
   } finally { r.busy = false; }
   await ping();
   if (open === "settings") APPS.settings.open();
@@ -830,7 +879,7 @@ function ask({ title, code, says, yes, no, field }) {
       end = null; done(a); setTimeout(next, 260); // the next question after this one has slid away
     };
     const inputs = field ? [field.placeholder, ...(field.twice ? ["the same again"] : [])].map(placeholder =>
-      Object.assign(el("input", "m-input ask-field"), { type: "password", placeholder, autocomplete: "off", autocapitalize: "off", spellcheck: false })) : [];
+      Object.assign(el("input", "m-input ask-field"), { type: field.type || "password", placeholder, autocomplete: "off", autocapitalize: "off", spellcheck: false })) : [];
     const fail = text("div", "ask-fail", "");
     const typed = () => {
       const v = inputs[0].value, why = inputs[1] && inputs[1].value !== v ? "The two don't match" : field.check?.(v) || "";
@@ -1331,6 +1380,25 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) ping
     toast("Kept for the desk", true);
     openApp("share");
   }
+  // opened by a desk's QR code (the claim by QR code, Gab 2026-11-23): where the desk is, and the code its screen shows;
+  // out of the address at once, so a reload or a shared link doesn't carry it
+  const brought = new URLSearchParams(location.hash.slice(1));
+  if (brought.has("claim") && brought.has("desk")) {
+    history.replaceState(null, "", location.pathname + location.search);
+    await put("settings", brought.get("desk"), "desk");
+    await put("settings", { code: brought.get("claim"), desk: brought.get("desk"), board: brought.get("board"), until: Date.now() + 9 * 60000 }, "claim-code");
+  }
   badges();
-  ping();
+  await ping();
+  // the first visit, or a desk's QR code: install first (a modal, Gab: "the client app need to have a modal to let …
+  // the app be installed on the phone"), then the claim, here or, on an iPhone, in the installed app
+  const claiming = !!await broughtCode(), first = !await setting("install-asked");
+  if (!installed() && (claiming || first)) {
+    await put("settings", Date.now(), "install-asked");
+    await installSheet(claiming);
+  }
+  if (claiming && !(ios && !installed())) {
+    if (hello?.claimed === false) askClaim();
+    else if (!hello) toast("The desk doesn't answer at " + (await broughtCode()).desk + ". Is this phone on the same WiFi as the desk?", false);
+  }
 })();

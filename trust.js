@@ -37,13 +37,14 @@ export async function keyId(bytes) {
   return [...new Uint8Array(await subtle.digest("SHA-256", bytes))].slice(0, 8).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// the claim, over the cable: the desk keeps this phone's public key and gives its own
+// the claim, over the cable or with a code: the desk keeps this phone's public key and gives its own
 // word: the desk's secret word, when this phone takes over a desk another phone owns (a lost phone; the desk's
 // SECURE-LINK.md, step 6). Over the cable only, as the claim itself
-export async function claim(at, name, word) {
+// code: the one a screen near the desk shows under its QR code; with it the claim goes over the WiFi (Gab, 2026-11-23)
+export async function claim(at, name, word, code) {
   const pair = await phoneKey();
   const r = await fetch("http://" + at + "/api/trust/claim", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: b64(await raw(pair.publicKey)), name, ...(word != null ? { word } : {}) }) });
+    body: JSON.stringify({ key: b64(await raw(pair.publicKey)), name, ...(word != null ? { word } : {}), ...(code ? { code } : {}) }) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || "the desk answered " + r.status);
   const mine = { board: data.board, boardId: await keyId(unb64(data.board)), id: data.id, host: data.host, since: Date.now() };
