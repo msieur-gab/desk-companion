@@ -16,9 +16,11 @@ setTheme(themeNow()); // the phone's bar above the page in the theme chosen (ind
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const text = (tag, cls, t) => Object.assign(el(tag, cls), { textContent: t ?? "" });
 // a short message over everything, as symbios mobile shows them
+// a short message at the top, under the status bar, clear of the ask sheet rising from the bottom (Gab, 24 Nov: "this
+// green notification ... is overlapping with the app sheet at the bottom of the screen ... should be on the top of the screen")
 const toast = (msg, ok) => {
   const t = text("div", "m-toast", msg);
-  t.style.cssText = "position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:99999;padding:10px 16px;border-radius:10px;font-size:13px;max-width:84%;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.45);background:" + (ok === false ? "#664400" : "var(--accent,#0f0)") + ";color:var(--bg,#000)";
+  t.style.cssText = "position:fixed;left:50%;top:calc(env(safe-area-inset-top, 0px) + var(--bar-h, 36px) + 8px);transform:translateX(-50%);z-index:99999;padding:10px 16px;border-radius:10px;font-size:13px;max-width:84%;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.45);background:" + (ok === false ? "#664400" : "var(--accent,#0f0)") + ";color:var(--bg,#000)";
   document.body.append(t);
   setTimeout(() => t.remove(), 3400);
 };
