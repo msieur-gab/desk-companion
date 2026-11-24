@@ -3,13 +3,15 @@
 // phone, readable with no network), Shared (links and files shared to it, waiting for the desk), Memos (voice notes
 // recorded here; the ones kept go to the desk's inbox, which writes their text), Monitor
 // (how the desk is doing), Notes (the desk's ~/Notes, kept here to read and write; notes.js), Player (the desk's Music, Voice
-// memos and Podcasts played on the phone, kept here for away; player.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
+// memos and Podcasts played on the phone, kept here for away; player.js), Mesh (the Meshtastic radio plugged into the desk:
+// its channels and direct messages, read and sent from here; mesh.js), Remote (the phone as the desk's trackpad), Slides (the phone as the clicker
 // of a deck on the desk, with the notes and the next slide) and Settings (where the desk is, sync, install). The desk does the
 // work on a link; the phone only carries it there and brings the article back.
 
 import * as trust from "./trust.js";
 import { notesApp, syncNotes } from "./notes.js";
 import { playerApp } from "./player.js";
+import { meshApp } from "./mesh.js";
 import { themePicker, setTheme, current as themeNow } from "./utils/theme.js";
 setTheme(themeNow()); // the phone's bar above the page in the theme chosen (index.html set the page's before it drew)
 
@@ -358,7 +360,7 @@ const note = t => text("div", "m-pad m-muted", t);
 // as modules or additional self contained code to extend companion capabilities"). A module exports a function that
 // takes the shell and returns an app { name, glyph, dock, open(), fresh() }; adding one is a line here, a line in
 // sw.js (kept offline) and, if it keeps things, a store in db.js. The other apps move out one at a time, later.
-const MODULES = { notes: notesApp, player: playerApp };
+const MODULES = { notes: notesApp, player: playerApp, mesh: meshApp };
 function modules() {
   const shell = {
     el, text, toast, row, note, body, title, inside, top: () => { back = null; },
@@ -1355,7 +1357,7 @@ function confirmRemove(r, key) {
 // ---- springboard + dock ----
 function tile(id) {
   const b = el("button", "app-tile"), glyph = el("span", "glyph", APPS[id].glyph);
-  if (id === "share" || id === "memos" || id === "notes") { const n = Object.assign(el("span", "tile-badge"), { hidden: true }); n.dataset.app = id; glyph.append(n); }
+  if (id === "share" || id === "memos" || id === "notes" || id === "mesh") { const n = Object.assign(el("span", "tile-badge"), { hidden: true }); n.dataset.app = id; glyph.append(n); }
   b.append(glyph, text("span", "label", APPS[id].name));
   b.onclick = () => openApp(id);
   return b;
@@ -1366,7 +1368,7 @@ for (const id of Object.keys(APPS).filter(id => !APPS[id].needs || APPS[id].need
 }
 async function badges() {
   const n = { share: (await all("waiting")).length + (await all("files")).length, memos: (await all("memos")).filter(m => m.keep).length,
-    notes: (await all("notes")).filter(n => n.keep).length }; // links and files waiting, memos and notes kept for the desk
+    notes: (await all("notes")).filter(n => n.keep).length, mesh: APPS.mesh?.unread() || 0 }; // links and files waiting, memos and notes kept for the desk, mesh messages unread
   for (const b of document.querySelectorAll(".tile-badge")) { b.hidden = !n[b.dataset.app]; b.textContent = n[b.dataset.app]; }
 }
 
