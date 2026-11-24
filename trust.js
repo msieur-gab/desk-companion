@@ -41,13 +41,16 @@ export async function keyId(bytes) {
 // word: the desk's secret word, when this phone takes over a desk another phone owns (a lost phone; the desk's
 // SECURE-LINK.md, step 6). Over the cable only, as the claim itself
 // code: the one a screen near the desk shows under its QR code; with it the claim goes over the WiFi (Gab, 2026-11-23)
-export async function claim(at, name, word, code) {
+// board: the desk's key id its QR code brought; a desk answering with another key isn't the one whose screen was seen
+// (someone in the middle of the WiFi), and this phone keeps nothing of it (the desk's SECURITY.md, review of 24 Nov, A3)
+export async function claim(at, name, word, code, board) {
   const pair = await phoneKey();
   const r = await fetch("http://" + at + "/api/trust/claim", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key: b64(await raw(pair.publicKey)), name, ...(word != null ? { word } : {}), ...(code ? { code } : {}) }) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || "the desk answered " + r.status);
   const mine = { board: data.board, boardId: await keyId(unb64(data.board)), id: data.id, host: data.host, since: Date.now() };
+  if (board && mine.boardId !== board) throw new Error("the desk that answered isn't the one whose QR code was scanned: claim it at home, on a WiFi you trust");
   await put("settings", mine, "owner");
   return mine;
 }

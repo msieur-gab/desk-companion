@@ -821,7 +821,7 @@ async function askClaim(r) {
   const brought = await broughtCode();
   if (brought) return ask({ title: "Claim this desk", code: codeShown(brought.code), yes: "CLAIM", no: "CANCEL",
     says: YOURS + " The code is the one under the QR code on the desk's screen." })
-    .answer.then(yes => yes && claimDesk(r, null, brought.code, brought.desk));
+    .answer.then(yes => yes && claimDesk(r, null, brought.code, brought.desk, brought.board));
   if (cable) return ask({ title: "Claim this desk", yes: "CLAIM", no: "CANCEL",
     says: YOURS + " The claim goes over the USB cable, with the phone's WiFi and mobile data off." })
     .answer.then(yes => yes && claimDesk(r));
@@ -831,7 +831,8 @@ async function askClaim(r) {
     .answer.then(async typed => typed && claimDesk(r, null, typed, cable ? CABLE : await setting("desk")));
 }
 // code, where: the code a near screen showed, and the desk's address on the WiFi; without them, over the cable
-async function claimDesk(r, word, code, where) {
+// board: the desk's key id the QR code brought, checked against the desk that answers (trust.claim)
+async function claimDesk(r, word, code, where, board) {
   r ||= document.querySelector("#claim > *") || el("div"); // from the QR link, before the home's line is drawn
   if (r.busy) return;
   // without a code always over the cable, whatever address the desk was found at: a phone plugged in with its WiFi on
@@ -844,7 +845,7 @@ async function claimDesk(r, word, code, where) {
     if (code && !at) throw new Error("this phone doesn't know where the desk is yet: find it in Settings first");
     if (!await knock([at], code ? 5000 : 3000)) throw new Error(code ? "the desk doesn't answer at " + at + ". Is this phone on the same WiFi as the desk?"
       : "the desk isn't on the cable. Plug the phone in, turn its WiFi and mobile data off, then claim again");
-    await trust.claim(at, navigator.userAgentData?.platform || "phone", word, code && code.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+    await trust.claim(at, navigator.userAgentData?.platform || "phone", word, code && code.toUpperCase().replace(/[^A-Z0-9]/g, ""), code ? board : null);
     if (code) { await drop("settings", "claim-code"); await put("settings", at, "desk"); }
     sub.textContent = "checking…";
     const s = await trust.session(at), said = JSON.parse(new TextDecoder().decode(await s.send("POST", "/api/trust/ping")));
@@ -915,10 +916,39 @@ function askScreen(w) {
     screensCard();
   });
 }
+// ---- releasing the desk (the desk's Settings, This board; Gab, 24 Nov: "unclaim a board from plugging the board in a
+// computer, unlocking it via the phone ... and then release it from there"): a screen near the desk asks, this phone
+// confirms. Released, the desk is no longer this phone's; its files stay, and its QR code claims it again ----
+const releasing = new Map(); // id → the ask sheet's handle
+function askRelease(w) {
+  const q = ask({ title: "Release this desk?", yes: "RELEASE", no: "CANCEL",
+    says: "Asked from " + whereFrom(w) + ". This phone will no longer own it; its files stay on it, and its QR code claims it again. Release it only if you asked on that screen." });
+  releasing.set(w.id, q);
+  q.answer.then(async release => {
+    if (release === null) return;
+    try {
+      const got = await desk("/api/trust/release/answer", { id: w.id, release });
+      if (!got.done) toast("That release was no longer asked", false);
+      else if (got.released) { await drop("settings", "owner"); toast("The desk is released", true); }
+      else toast("Release refused", true);
+    } catch (e) { toast("The answer: " + e.message, false); }
+    releasing.delete(w.id);
+    await ping();
+    if (open === "settings") APPS.settings.open();
+  });
+}
+async function releasesAsked(mine) {
+  const asked = mine ? (await desk("/api/trust/release/pending").catch(() => ({}))).releases || [] : [];
+  for (const [id, q] of releasing) if (!asked.some(w => w.id === id)) { q.close(); releasing.delete(id); } // answered elsewhere, or ran out
+  for (const w of asked) if (!releasing.has(w.id)) askRelease(w);
+}
+
 async function screensCard() {
   const box = document.getElementById("screens");
   let waiting = [];
-  if (hello?.claimed && hello.board === (await trust.owned())?.boardId) waiting = (await desk("/api/screen/pending").catch(() => ({}))).screens || [];
+  const mine = hello?.claimed && hello.board === (await trust.owned())?.boardId;
+  if (mine) waiting = (await desk("/api/screen/pending").catch(() => ({}))).screens || [];
+  releasesAsked(mine);
   for (const [id, q] of asking) if (!waiting.some(w => w.id === id)) { q.close(); asking.delete(id); } // answered, or the code ran out
   for (const w of waiting) if (!asking.has(w.id)) askScreen(w);
   box.hidden = !waiting.length;
