@@ -239,6 +239,9 @@ async function follow() { // started at the end, once wasOnline exists
       deskTasks = d.tasks;
       APPS.status.activity?.();
       if (seq !== -1 && (d.missed || d.changes.some(c => /^(Articles|Slides|Notes)(\/|$)/.test(c.folder)))) sync(false, true);
+      // a screen asking for its code, or to release the desk: asked now, not at the next look up to 15 s later (Gab,
+      // 24 Nov: "it takes a very long time for these codes to show up inside the app sheet")
+      if (seq !== -1 && d.changes.some(c => c.folder === ".lock")) screensCard();
       seq = d.seq; boot = d.boot;
     } catch { await new Promise(r => setTimeout(r, 3000)); }
   }
